@@ -1,0 +1,31 @@
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+diffusers>=0.21.0
+transformers>=4.30.0
+accelerate>=0.20.0
+
+# Image processing
+Pillow>=10.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# ML utilities
+scikit-image>=0.21.0
+scipy>=1.11.0
+
+# File system utilities
+watchdog>=3.0.0
+
+# Configuration and validation
+pydantic>=2.0.0
+pyyaml>=6.0
+
+# Logging and monitoring
+structlog>=23.0.0
+
+# Development
+pytest>=7.4.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.5.0
