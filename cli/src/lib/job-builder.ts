@@ -1,11 +1,27 @@
 import { JobSpec, JobSpecSchema } from '../types/job-spec';
 import { v4 as uuidv4 } from 'uuid';
 
+interface TilesetConfig {
+  tileCount: number;
+  atlasColumns: number;
+  atlasRows: number;
+}
+
+function getTilesetConfig(tilesetType: string): TilesetConfig {
+  const configs: Record<string, TilesetConfig> = {
+    minimal: { tileCount: 13, atlasColumns: 4, atlasRows: 4 },
+    extended: { tileCount: 47, atlasColumns: 8, atlasRows: 6 },
+    full: { tileCount: 256, atlasColumns: 16, atlasRows: 16 }
+  };
+
+  return configs[tilesetType] || configs.minimal;
+}
+
 export interface GenerateOptions {
   theme: string;
   palette: string;
   size: string;
-  count: string;
+  tileset: string;
   watch?: boolean;
   subTileSize?: string;
   baseModel?: string;
@@ -19,11 +35,13 @@ export class JobBuilder {
   static build(options: GenerateOptions): JobSpec {
     const tileSize = parseInt(options.size, 10);
     const subTileSize = parseInt(options.subTileSize || '8', 10);
-    const tileCount = parseInt(options.count, 10);
 
-    // Calculate optimal atlas layout
-    const columns = Math.ceil(Math.sqrt(tileCount));
-    const rows = Math.ceil(tileCount / columns);
+    // Get proper tile count based on tessellation type
+    const tilesetConfig = getTilesetConfig(options.tileset);
+
+    // Calculate optimal atlas layout for tessellation
+    const columns = tilesetConfig.atlasColumns;
+    const rows = tilesetConfig.atlasRows;
 
     const jobSpec: JobSpec = {
       id: uuidv4(),
@@ -31,7 +49,7 @@ export class JobBuilder {
       palette: options.palette,
       tileSize,
       subTileSize,
-      tileCount,
+      tileset_type: options.tileset as 'minimal' | 'extended' | 'full',
 
       // Universal tileset configuration
       tilesetConfig: {

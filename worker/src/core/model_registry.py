@@ -209,6 +209,18 @@ class ModelRegistry:
                 quantization_method="kmeans",
                 dithering_enabled=True
             ),
+            "medieval": PaletteConfig(
+                name="Medieval Fantasy",
+                description="Classic medieval fantasy palette with warm earth tones and metallic accents",
+                colors=[
+                    "#2D1C10", "#5B4037", "#8B5A2B", "#B48367",
+                    "#D7B19D", "#E4CDAE", "#F0EAD6", "#FFFFFF",
+                    "#A57C50", "#7B5833", "#4C3328", "#1C1C1C",
+                    "#A5C6E0", "#7393B3", "#4C607D", "#2D3447"
+                ],
+                quantization_method="kmeans",
+                dithering_enabled=False
+            ),
             "earth": PaletteConfig(
                 name="Earth Tones",
                 description="Natural earth tones and organic colors",

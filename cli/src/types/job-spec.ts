@@ -8,7 +8,7 @@ export const JobSpecSchema = z.object({
   // Multi-tile size support
   tileSize: z.number().min(16).max(512), // Support larger tiles
   subTileSize: z.number().min(4).max(64).default(8), // 8x8 sub-tiles by default
-  tileCount: z.number().min(1).max(256), // Support more tiles
+  tileset_type: z.enum(['minimal', 'extended', 'full']).default('minimal'), // Tessellation type
 
   // Universal tileset configuration
   tilesetConfig: z.object({

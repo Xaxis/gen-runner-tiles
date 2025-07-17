@@ -16,7 +16,7 @@ worker/src/
     ├── 04_reference_synthesis.py    # ControlNet conditioning images (TODO)
     ├── 05_diffusion_core.py         # FLUX tile generation (TODO)
     ├── 06_constraint_enforcement.py # Real-time validation (TODO)
-    ├── 07_palette_harmonization.py  # Color quantization (TODO)
+    ├── 07_failure_recovery.py       # Regeneration and integration (TODO)
     ├── 08_post_processing.py        # Image cleanup (TODO)
     ├── 09_atlas_generation.py       # Final packing and metadata (TODO)
     └── 10_quality_validation.py     # Quality gates & auto-regen (TODO)

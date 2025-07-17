@@ -19,7 +19,7 @@ logger = structlog.get_logger()
 class JobProcessor:
     """Main job processor that orchestrates the 10-stage tile generation pipeline."""
     
-    def __init__(self, jobs_dir: str = "./jobs"):
+    def __init__(self, jobs_dir: str = "../jobs"):
         self.jobs_dir = Path(jobs_dir)
         self.queue_dir = self.jobs_dir / "queue"
         self.status_dir = self.jobs_dir / "status"
@@ -33,17 +33,53 @@ class JobProcessor:
         # Pipeline stages in execution order
         self.pipeline_stages = [
             (1, "job_validation", "Validating job specification"),
-            (2, "tileset_generation", "Generating universal tileset structure"),
+            (2, "tileset_setup", "Setting up tessellation tileset structure"),
             (3, "perspective_setup", "Setting up perspective and lighting"),
             (4, "reference_synthesis", "Synthesizing reference maps"),
-            (5, "diffusion_core", "Running FLUX tile generation"),
-            (6, "constraint_enforcement", "Enforcing tile constraints"),
-            (7, "palette_harmonization", "Harmonizing palette and style"),
-            (8, "post_processing", "Post-processing tiles"),
-            (9, "atlas_generation", "Generating final atlas"),
-            (10, "quality_validation", "Validating output quality"),
+            (5, "diffusion_core", "Running FLUX multi-tile generation"),
+            (6, "constraint_enforcement", "Enforcing tessellation constraints"),
+            (7, "failure_recovery", "Failure recovery and integration")
         ]
-    
+
+    def process_job(self, job_spec: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a single job specification directly."""
+        job_id = job_spec.get('id', 'unknown')
+        logger.info("Processing job directly", job_id=job_id)
+
+        try:
+            # Create pipeline context
+            output_path = self.output_dir / job_id
+            context = PipelineContext(job_spec, output_path)
+
+            # Execute all pipeline stages
+            for stage_num, stage_name, stage_desc in self.pipeline_stages:
+                logger.info(f"Executing stage {stage_num}", stage=stage_name, description=stage_desc)
+
+                result = self._execute_stage(stage_num, stage_name, context)
+
+                if not result.get("success", False):
+                    errors = result.get('errors', ['Unknown error'])
+                    error_details = result.get('error_details', {})
+                    error_msg = f"Stage {stage_num} ({stage_name}) failed: {errors}"
+
+                    # Log detailed error information
+                    logger.error("Pipeline stage failed",
+                               stage=stage_num,
+                               stage_name=stage_name,
+                               errors=errors,
+                               error_details=error_details,
+                               full_result=result)
+
+                    return {"success": False, "error": error_msg, "failed_stage": stage_num, "stage_result": result}
+
+            logger.info("Job completed successfully", job_id=job_id)
+            return {"success": True, "output_path": str(output_path)}
+
+        except Exception as e:
+            error_msg = f"Job processing failed: {str(e)}"
+            logger.error("Job processing failed", job_id=job_id, error=error_msg)
+            return {"success": False, "error": error_msg}
+
     def run(self, poll_interval: float = 2.0):
         """Main processing loop that polls for jobs and processes them."""
         logger.info("Starting job processor", jobs_dir=str(self.jobs_dir))
@@ -163,16 +199,12 @@ class JobProcessor:
             "palette": job_spec.get("palette"),
             "tile_size": job_spec.get("tileSize", 32),
             "sub_tile_size": job_spec.get("subTileSize", 8),
-            "tile_count": job_spec.get("tileCount", 16),
+            "tileset_type": job_spec.get("tileset_type", "minimal"),
         }
         
-        # Extract tileset configuration
-        tileset_config = job_spec.get("tilesetConfig", {})
-        config["tileset"] = {
-            "building_blocks": tileset_config.get("buildingBlocks", ["center"]),
-            "variations_per_block": tileset_config.get("variationsPerBlock", 3),
-            "composition_rules": tileset_config.get("compositionRules", "basic"),
-        }
+        # Tileset configuration is now handled by tileset_type (minimal, extended, full)
+        # Composition rules are also determined by tessellation requirements
+        # @TODO Shouldn't we still have some mechanism for variations?
         
         # Extract model configuration
         model_config = job_spec.get("modelConfig", {})
@@ -234,29 +266,29 @@ class JobProcessor:
     def _execute_stage(self, stage_num: int, stage_name: str, context: PipelineContext) -> Dict[str, Any]:
         """Execute a specific pipeline stage."""
         try:
-            # Import and execute the appropriate stage
-            if stage_num == 1:
-                from ..stages.stage_01_job_validation import execute
-            elif stage_num == 2:
-                from ..stages.stage_02_tileset_setup import execute
-            elif stage_num == 3:
-                from ..stages.stage_03_perspective_setup import execute
-            elif stage_num == 4:
-                from ..stages.stage_04_reference_synthesis import execute
-            elif stage_num == 5:
-                from ..stages.stage_05_diffusion_core import execute
-            elif stage_num == 6:
-                from ..stages.stage_06_constraint_enforcement import execute
-            elif stage_num == 7:
-                from ..stages.stage_07_palette_harmonization import execute
-            elif stage_num == 8:
-                from ..stages.stage_08_post_processing import execute
-            elif stage_num == 9:
-                from ..stages.stage_09_atlas_generation import execute
-            elif stage_num == 10:
-                from ..stages.stage_10_quality_validation import execute
-            else:
-                return {"success": False, "error": f"Unknown stage: {stage_num}"}
+            # Import and execute the appropriate stage using importlib
+            import importlib
+
+            stage_files = {
+                1: "01_job_validation",
+                2: "02_tileset_setup",
+                3: "03_perspective_setup",
+                4: "04_reference_synthesis",
+                5: "05_diffusion_core",
+                6: "06_constraint_enforcement",
+                7: "07_failure_recovery"
+            }
+
+            if stage_num not in stage_files:
+                return {"success": False, "error": f"Unknown stage number: {stage_num}"}
+
+            try:
+                # Import the stage module directly
+                module_name = f"src.stages.{stage_files[stage_num]}"
+                stage_module = importlib.import_module(module_name)
+                execute = stage_module.execute
+            except ImportError as e:
+                return {"success": False, "error": f"Failed to import stage {stage_num}: {str(e)}"}
             
             # Execute the stage
             result = execute(context)

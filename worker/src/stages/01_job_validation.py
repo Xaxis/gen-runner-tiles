@@ -42,11 +42,12 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
         if not context.validate_context_state(1):
             return {"success": False, "errors": context.pipeline_errors}
         
-        # Get extracted configuration
-        extracted_config = getattr(context, 'extracted_config', None)
-        if not extracted_config:
-            validation_errors.append("No extracted configuration found")
-            return {"success": False, "errors": validation_errors}
+        # Extract configuration from job specification
+        logger.info("Extracting configuration from job specification")
+        extracted_config = _extract_configuration_from_job_spec(context.job_spec)
+
+        # Store extracted config in context for later stages
+        context.extracted_config = extracted_config
         
         # 1. Validate basic job specification
         basic_validation = _validate_basic_job_spec(context.job_spec)
@@ -99,11 +100,14 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
                           warning_count=len(validation_warnings),
                           warnings=validation_warnings)
         
-        logger.info("Job validation completed successfully", 
+        # Update context stage
+        context.current_stage = 1
+
+        logger.info("Job validation completed successfully",
                    job_id=context.get_job_id(),
                    theme=extracted_config["theme"],
-                   tile_count=extracted_config["tile_count"])
-        
+                   tileset_type=extracted_config["tileset_type"])
+
         return {
             "success": True,
             "validated_job_spec": validated_job_spec,
@@ -111,7 +115,7 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
             "validation_summary": {
                 "theme": extracted_config["theme"],
                 "palette": extracted_config["palette"],
-                "tile_count": extracted_config["tile_count"],
+                "tileset_type": extracted_config["tileset_type"],
                 "tile_size": extracted_config["tile_size"],
                 "sub_tile_size": extracted_config["sub_tile_size"],
                 "base_model": extracted_config["models"]["base_model"],
@@ -131,7 +135,7 @@ def _validate_basic_job_spec(job_spec: Dict[str, Any]) -> Dict[str, List[str]]:
     warnings = []
     
     # Required fields
-    required_fields = ["id", "theme", "palette", "tileSize", "tileCount", "createdAt"]
+    required_fields = ["id", "theme", "palette", "tileSize", "tileset_type", "createdAt"]
     for field in required_fields:
         if field not in job_spec:
             errors.append(f"Missing required field: {field}")
@@ -168,10 +172,11 @@ def _validate_extracted_config(config: Dict[str, Any]) -> Dict[str, List[str]]:
     if tile_size % sub_tile_size != 0:
         errors.append(f"Tile size {tile_size} must be divisible by sub-tile size {sub_tile_size}")
     
-    # Validate tile count
-    tile_count = config.get("tile_count", 0)
-    if tile_count < 1 or tile_count > 256:
-        errors.append(f"Tile count {tile_count} must be between 1 and 256")
+    # Validate tileset type
+    tileset_type = config.get("tileset_type", "")
+    valid_tileset_types = ["minimal", "extended", "full"]
+    if tileset_type not in valid_tileset_types:
+        errors.append(f"Invalid tileset type '{tileset_type}'. Must be one of: {valid_tileset_types}")
     
     # Validate constraints
     constraints = config.get("constraints", {})
@@ -262,27 +267,8 @@ def _validate_tile_parameters(config: Dict[str, Any]) -> Dict[str, List[str]]:
     errors = []
     warnings = []
     
-    # Validate tileset configuration
-    tileset_config = config.get("tileset", {})
-    building_blocks = tileset_config.get("building_blocks", [])
-    
-    if not building_blocks:
-        errors.append("No building blocks specified for tileset")
-    
-    valid_blocks = [
-        "center", "border_top", "border_right", "border_bottom", "border_left",
-        "edge_ne", "edge_nw", "edge_se", "edge_sw",
-        "corner_ne", "corner_nw", "corner_se", "corner_sw"
-    ]
-    
-    for block in building_blocks:
-        if block not in valid_blocks:
-            errors.append(f"Invalid building block: {block}")
-    
-    # Validate variations per block
-    variations = tileset_config.get("variations_per_block", 1)
-    if variations < 1 or variations > 20:
-        errors.append(f"Variations per block {variations} must be between 1 and 20")
+    # Tileset configuration is now handled by tileset_type
+    # No need to validate building blocks since they're determined by tessellation requirements
     
     # Validate atlas configuration
     atlas_config = config.get("atlas", {})
@@ -339,7 +325,13 @@ def _create_validated_job_spec(job_spec: Dict[str, Any], config: Dict[str, Any])
     
     # Add computed atlas layout if not specified
     if "atlasLayout" not in validated_spec or not validated_spec["atlasLayout"].get("columns"):
-        tile_count = config["tile_count"]
+        tileset_type = config["tileset_type"]
+        tessellation_counts = {
+            "minimal": 13,
+            "extended": 47,
+            "full": 256
+        }
+        tile_count = tessellation_counts.get(tileset_type, 13)
         columns = int(tile_count ** 0.5) + (1 if tile_count ** 0.5 != int(tile_count ** 0.5) else 0)
         rows = (tile_count + columns - 1) // columns
         
@@ -352,3 +344,50 @@ def _create_validated_job_spec(job_spec: Dict[str, Any], config: Dict[str, Any])
         }
     
     return validated_spec
+
+def _extract_configuration_from_job_spec(job_spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract and normalize configuration from job specification."""
+
+    # Extract basic configuration
+    extracted_config = {
+        "theme": job_spec.get("theme", "fantasy"),
+        "palette": job_spec.get("palette", "default"),
+        "tile_size": job_spec.get("tileSize", 64),
+        "sub_tile_size": job_spec.get("subTileSize", 32),
+        "tileset_type": job_spec.get("tileset_type", "minimal"),
+
+        # Model configuration
+        "models": {
+            "base_model": job_spec.get("models", {}).get("baseModel", "flux-dev"),
+            "controlnet_model": job_spec.get("models", {}).get("controlnetModel", "flux-controlnet-union"),
+            "use_controlnet": job_spec.get("models", {}).get("useControlNet", True),
+            "precision": job_spec.get("models", {}).get("precision", "fp16")
+        },
+
+        # Generation parameters
+        "generation": {
+            "steps": job_spec.get("generation", {}).get("steps", 20),
+            "guidance_scale": job_spec.get("generation", {}).get("guidanceScale", 3.5),
+            "seed": job_spec.get("generation", {}).get("seed", None),
+            "batch_size": job_spec.get("generation", {}).get("batchSize", 1)
+        },
+
+        # Constraints
+        "constraints": {
+            "edge_similarity": job_spec.get("constraints", {}).get("edgeSimilarity", 0.95),
+            "palette_deviation": job_spec.get("constraints", {}).get("paletteDeviation", 5.0),
+            "structural_compliance": job_spec.get("constraints", {}).get("structuralCompliance", 0.8),
+            "sub_tile_coherence": job_spec.get("constraints", {}).get("subTileCoherence", 0.7)
+        },
+
+        # Atlas configuration
+        "atlas": {
+            "columns": job_spec.get("atlasLayout", {}).get("columns", 4),
+            "rows": job_spec.get("atlasLayout", {}).get("rows", 4),
+            "padding": job_spec.get("atlasLayout", {}).get("padding", 1),
+            "power_of_two": job_spec.get("atlasLayout", {}).get("powerOfTwo", True),
+            "max_size": job_spec.get("atlasLayout", {}).get("maxSize", 2048)
+        }
+    }
+
+    return extracted_config

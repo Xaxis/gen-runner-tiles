@@ -21,7 +21,7 @@ program
   .option('-p, --palette <palette>', 'Color palette name')
   .option('-s, --size <size>', 'Tile size in pixels', '32')
   .option('--sub-tile-size <size>', 'Sub-tile size in pixels', '8')
-  .option('-c, --count <count>', 'Number of tiles to generate', '16')
+  .option('--tileset <type>', 'Tileset type (minimal, extended, full)', 'minimal')
   .option('--base-model <model>', 'Base model to use (flux-dev, flux-schnell)', 'flux-dev')
   .option('--no-controlnet', 'Disable ControlNet guidance')
   .option('--steps <steps>', 'Number of diffusion steps')

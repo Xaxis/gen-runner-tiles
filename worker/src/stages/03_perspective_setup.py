@@ -69,12 +69,15 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
         context.global_camera_params = camera_params
         context.lighting_config = lighting_config
         
-        logger.info("Perspective setup completed", 
+        # Update context stage
+        context.current_stage = 3
+
+        logger.info("Perspective setup completed",
                    job_id=context.get_job_id(),
                    view_angle=view_angle,
                    lighting_type=lighting_config["type"],
                    camera_elevation=camera_params["elevation"])
-        
+
         return {
             "success": True,
             "camera_params": camera_params,

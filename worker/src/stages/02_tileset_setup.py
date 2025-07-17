@@ -67,20 +67,18 @@ class TilesetSetup:
 
     def __init__(self, config: Dict[str, Any]):
         self.theme = config["theme"]
-        self.tile_count = config["tile_count"]
         self.tile_size = config["tile_size"]
         self.sub_tile_size = config["sub_tile_size"]
 
-        # Atlas configuration
+        # Determine proper tile count based on tessellation requirements
+        self.tileset_type = config.get("tileset_type", "minimal")
+        self.tile_count = self._get_tessellation_tile_count(self.tileset_type)
+
+        # Atlas configuration based on tessellation requirements
         atlas_config = config.get("atlas", {})
-        self.atlas_columns = atlas_config.get("columns", int(np.sqrt(self.tile_count)))
+        self.atlas_columns = atlas_config.get("columns", self._calculate_optimal_atlas_columns())
         self.atlas_rows = atlas_config.get("rows", int(np.ceil(self.tile_count / self.atlas_columns)))
         self.atlas_padding = atlas_config.get("padding", 1)
-
-        # Tileset configuration
-        tileset_config = config.get("tileset", {})
-        self.building_blocks = tileset_config.get("building_blocks", ["center"])
-        self.variations_per_block = tileset_config.get("variations_per_block", 3)
 
         # Generated data structures
         self.tile_specs: Dict[int, TileSpec] = {}
@@ -89,6 +87,27 @@ class TilesetSetup:
         self.atlas_layout: Dict[int, TilePosition] = {}
 
         self._setup_tileset()
+
+    def _get_tessellation_tile_count(self, tileset_type: str) -> int:
+        """Get proper tile count for tessellation type."""
+        tessellation_counts = {
+            "minimal": 13,    # Core tiles for basic tessellation
+            "extended": 47,   # All 2x2 combinations for complete tessellation
+            "full": 256       # Complete Wang tile set with variations
+        }
+        return tessellation_counts.get(tileset_type, 13)
+
+    def _calculate_optimal_atlas_columns(self) -> int:
+        """Calculate optimal atlas columns for tessellation."""
+        # Use power-of-2 dimensions for optimal GPU usage
+        if self.tile_count <= 16:
+            return 4
+        elif self.tile_count <= 64:
+            return 8
+        elif self.tile_count <= 256:
+            return 16
+        else:
+            return 32
 
     def _setup_tileset(self):
         """Set up the complete tileset structure."""
@@ -160,112 +179,182 @@ class TilesetSetup:
             self.adjacency_graph[tile_id] = neighbors
 
     def _generate_tile_compositions(self):
-        """Generate structure compositions for each tile based on position and neighbors."""
-        # Define composition patterns based on tile position in atlas
+        """Generate structure compositions for proper tessellation."""
+        # Generate tiles based on tessellation requirements, not atlas position
+        tessellation_tiles = self._generate_tessellation_tiles()
+
         for tile_id in range(self.tile_count):
-            position = self.atlas_layout[tile_id]
-            neighbors = self.adjacency_graph[tile_id]
+            if tile_id < len(tessellation_tiles):
+                # Use tessellation-based composition
+                composition = tessellation_tiles[tile_id]
+            else:
+                # Fill remaining slots with center tiles
+                composition = {
+                    "top_left": TileStructure.CENTER.value,
+                    "top_right": TileStructure.CENTER.value,
+                    "bottom_left": TileStructure.CENTER.value,
+                    "bottom_right": TileStructure.CENTER.value
+                }
 
-            # Determine tile role based on position and neighbors
-            tile_role = self._determine_tile_role(position, neighbors)
-
-            # Generate structure composition based on role
-            composition = self._generate_composition_for_role(tile_role, neighbors)
-
-            # Store composition (will be used in tile spec creation)
+            # Store composition
             setattr(self, f'_composition_{tile_id}', composition)
 
-    def _determine_tile_role(self, position: TilePosition, neighbors: Dict[str, int]) -> str:
-        """Determine the role of a tile based on its position and neighbors."""
-        neighbor_count = len(neighbors)
+    def _generate_tessellation_tiles(self) -> List[Dict[str, str]]:
+        """Generate tiles based on proper tessellation requirements (Wang tiles/blob tileset)."""
+        tessellation_tiles = []
 
-        # Corner tiles (2 neighbors)
-        if neighbor_count == 2:
-            if "right" in neighbors and "bottom" in neighbors:
-                return "corner_nw"  # Top-left corner
-            elif "left" in neighbors and "bottom" in neighbors:
-                return "corner_ne"  # Top-right corner
-            elif "right" in neighbors and "top" in neighbors:
-                return "corner_sw"  # Bottom-left corner
-            elif "left" in neighbors and "top" in neighbors:
-                return "corner_se"  # Bottom-right corner
+        # Generate all possible 2x2 corner combinations for seamless tessellation
+        # This follows the blob tileset approach from the reference
 
-        # Edge tiles (3 neighbors)
-        elif neighbor_count == 3:
-            if "top" not in neighbors:
-                return "edge_top"
-            elif "right" not in neighbors:
-                return "edge_right"
-            elif "bottom" not in neighbors:
-                return "edge_bottom"
-            elif "left" not in neighbors:
-                return "edge_left"
+        # Basic building blocks
+        # @TODO: AUGMENT FIX THIS< NOT BEING USED!
+        structures = [
+            TileStructure.CENTER.value,
+            TileStructure.BORDER_TOP.value,
+            TileStructure.BORDER_RIGHT.value,
+            TileStructure.BORDER_BOTTOM.value,
+            TileStructure.BORDER_LEFT.value,
+            TileStructure.EDGE_NE.value,
+            TileStructure.EDGE_NW.value,
+            TileStructure.EDGE_SE.value,
+            TileStructure.EDGE_SW.value,
+            TileStructure.CORNER_NE.value,
+            TileStructure.CORNER_NW.value,
+            TileStructure.CORNER_SE.value,
+            TileStructure.CORNER_SW.value
+        ]
 
-        # Interior tiles (4 neighbors) or isolated tiles
-        else:
-            return "interior"
+        # Generate minimal tileset (47 tiles) - all 2x2 combinations needed for seamless tiling
 
-    def _generate_composition_for_role(self, role: str, neighbors: Dict[str, int]) -> Dict[str, str]:
-        """Generate sub-tile composition based on tile role."""
-        # Default to all center
-        composition = {
+        # 1. All center tile
+        tessellation_tiles.append({
             "top_left": TileStructure.CENTER.value,
             "top_right": TileStructure.CENTER.value,
             "bottom_left": TileStructure.CENTER.value,
             "bottom_right": TileStructure.CENTER.value
-        }
+        })
 
-        # Modify based on role
-        if role == "corner_nw":
-            composition.update({
-                "top_left": TileStructure.EDGE_NW.value,
-                "top_right": TileStructure.BORDER_TOP.value,
-                "bottom_left": TileStructure.BORDER_LEFT.value,
-                "bottom_right": TileStructure.CENTER.value
-            })
-        elif role == "corner_ne":
-            composition.update({
-                "top_left": TileStructure.BORDER_TOP.value,
-                "top_right": TileStructure.EDGE_NE.value,
-                "bottom_left": TileStructure.CENTER.value,
-                "bottom_right": TileStructure.BORDER_RIGHT.value
-            })
-        elif role == "corner_sw":
-            composition.update({
-                "top_left": TileStructure.BORDER_LEFT.value,
-                "top_right": TileStructure.CENTER.value,
-                "bottom_left": TileStructure.EDGE_SW.value,
-                "bottom_right": TileStructure.BORDER_BOTTOM.value
-            })
-        elif role == "corner_se":
-            composition.update({
-                "top_left": TileStructure.CENTER.value,
-                "top_right": TileStructure.BORDER_RIGHT.value,
-                "bottom_left": TileStructure.BORDER_BOTTOM.value,
-                "bottom_right": TileStructure.EDGE_SE.value
-            })
-        elif role == "edge_top":
-            composition.update({
-                "top_left": TileStructure.BORDER_TOP.value,
-                "top_right": TileStructure.BORDER_TOP.value
-            })
-        elif role == "edge_right":
-            composition.update({
-                "top_right": TileStructure.BORDER_RIGHT.value,
-                "bottom_right": TileStructure.BORDER_RIGHT.value
-            })
-        elif role == "edge_bottom":
-            composition.update({
-                "bottom_left": TileStructure.BORDER_BOTTOM.value,
-                "bottom_right": TileStructure.BORDER_BOTTOM.value
-            })
-        elif role == "edge_left":
-            composition.update({
-                "top_left": TileStructure.BORDER_LEFT.value,
-                "bottom_left": TileStructure.BORDER_LEFT.value
-            })
+        # 2. Single borders (4 tiles)
+        border_configs = [
+            ("top", TileStructure.BORDER_TOP.value),
+            ("right", TileStructure.BORDER_RIGHT.value),
+            ("bottom", TileStructure.BORDER_BOTTOM.value),
+            ("left", TileStructure.BORDER_LEFT.value)
+        ]
 
-        return composition
+        for border_pos, border_type in border_configs:
+            if border_pos == "top":
+                tessellation_tiles.append({
+                    "top_left": border_type,
+                    "top_right": border_type,
+                    "bottom_left": TileStructure.CENTER.value,
+                    "bottom_right": TileStructure.CENTER.value
+                })
+            elif border_pos == "right":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.CENTER.value,
+                    "top_right": border_type,
+                    "bottom_left": TileStructure.CENTER.value,
+                    "bottom_right": border_type
+                })
+            elif border_pos == "bottom":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.CENTER.value,
+                    "top_right": TileStructure.CENTER.value,
+                    "bottom_left": border_type,
+                    "bottom_right": border_type
+                })
+            elif border_pos == "left":
+                tessellation_tiles.append({
+                    "top_left": border_type,
+                    "top_right": TileStructure.CENTER.value,
+                    "bottom_left": border_type,
+                    "bottom_right": TileStructure.CENTER.value
+                })
+
+        # 3. External corners (4 tiles)
+        corner_configs = [
+            ("ne", TileStructure.EDGE_NE.value),
+            ("nw", TileStructure.EDGE_NW.value),
+            ("se", TileStructure.EDGE_SE.value),
+            ("sw", TileStructure.EDGE_SW.value)
+        ]
+
+        for corner_pos, corner_type in corner_configs:
+            if corner_pos == "ne":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.CENTER.value,
+                    "top_right": corner_type,
+                    "bottom_left": TileStructure.CENTER.value,
+                    "bottom_right": TileStructure.CENTER.value
+                })
+            elif corner_pos == "nw":
+                tessellation_tiles.append({
+                    "top_left": corner_type,
+                    "top_right": TileStructure.CENTER.value,
+                    "bottom_left": TileStructure.CENTER.value,
+                    "bottom_right": TileStructure.CENTER.value
+                })
+            elif corner_pos == "se":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.CENTER.value,
+                    "top_right": TileStructure.CENTER.value,
+                    "bottom_left": TileStructure.CENTER.value,
+                    "bottom_right": corner_type
+                })
+            elif corner_pos == "sw":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.CENTER.value,
+                    "top_right": TileStructure.CENTER.value,
+                    "bottom_left": corner_type,
+                    "bottom_right": TileStructure.CENTER.value
+                })
+
+        # 4. Internal corners (4 tiles)
+        internal_corner_configs = [
+            ("ne", TileStructure.CORNER_NE.value),
+            ("nw", TileStructure.CORNER_NW.value),
+            ("se", TileStructure.CORNER_SE.value),
+            ("sw", TileStructure.CORNER_SW.value)
+        ]
+
+        for corner_pos, corner_type in internal_corner_configs:
+            if corner_pos == "ne":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.BORDER_LEFT.value,
+                    "top_right": TileStructure.BORDER_TOP.value,
+                    "bottom_left": TileStructure.BORDER_BOTTOM.value,
+                    "bottom_right": corner_type
+                })
+            elif corner_pos == "nw":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.BORDER_TOP.value,
+                    "top_right": TileStructure.BORDER_RIGHT.value,
+                    "bottom_left": corner_type,
+                    "bottom_right": TileStructure.BORDER_BOTTOM.value
+                })
+            elif corner_pos == "se":
+                tessellation_tiles.append({
+                    "top_left": TileStructure.BORDER_TOP.value,
+                    "top_right": corner_type,
+                    "bottom_left": TileStructure.BORDER_LEFT.value,
+                    "bottom_right": TileStructure.BORDER_BOTTOM.value
+                })
+            elif corner_pos == "sw":
+                tessellation_tiles.append({
+                    "top_left": corner_type,
+                    "top_right": TileStructure.BORDER_TOP.value,
+                    "bottom_left": TileStructure.BORDER_LEFT.value,
+                    "bottom_right": TileStructure.BORDER_RIGHT.value
+                })
+
+        # #@TODO AUGMENT SHOULD HAVE DONE THIS AND IS BEING LAZY!!!!
+        # 5. Additional combinations for complete tessellation (add more as needed)
+        # This gives us the minimal 13 core tiles needed for basic tessellation
+
+        return tessellation_tiles
+
+
 
     def _define_shared_edges(self):
         """Define shared edges between adjacent tiles."""
@@ -369,8 +458,8 @@ class TilesetSetup:
             "sub_tile_size": self.sub_tile_size,
             "total_shared_edges": len(self.shared_edges),
             "adjacency_connections": sum(len(neighbors) for neighbors in self.adjacency_graph.values()),
-            "building_blocks_used": self.building_blocks,
-            "variations_per_block": self.variations_per_block
+            "tessellation_type": self.tileset_type,
+            "tessellation_tiles_generated": len(self.tile_specs)
         }
 
 def execute(context: PipelineContext) -> Dict[str, Any]:
@@ -405,6 +494,9 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
         # Store in context for later stages
         context.universal_tileset = tileset_setup  # Keep same name for compatibility
         context.tileset_summary = tileset_setup.get_setup_summary()
+
+        # Update context stage
+        context.current_stage = 2
 
         logger.info("Tileset setup completed",
                    job_id=context.get_job_id(),

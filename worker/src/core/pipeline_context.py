@@ -43,9 +43,9 @@ class PipelineContext:
     constraint_violations: Dict[int, List[str]] = field(default_factory=dict)
     constraint_scores: Dict[int, Dict[str, float]] = field(default_factory=dict)
     
-    # Stage 07: Palette harmonization results
-    harmonized_tiles: Dict[int, Image.Image] = field(default_factory=dict)
-    palette_analysis: Optional[Dict[str, Any]] = None
+    # Stage 07: Failure recovery results
+    final_tiles: Dict[int, Image.Image] = field(default_factory=dict)
+    recovery_metadata: Optional[Dict[str, Any]] = None
     
     # Stage 08: Post-processing results
     processed_tiles: Dict[int, Image.Image] = field(default_factory=dict)
@@ -58,7 +58,7 @@ class PipelineContext:
     
     # Stage 10: Quality validation results
     quality_scores: Dict[str, float] = field(default_factory=dict)
-    regeneration_queue: List[int] = field(default_factory=list)
+    regeneration_queue: List[Dict[str, Any]] = field(default_factory=list)
     final_validation_passed: bool = False
     
     # Pipeline execution state
@@ -105,8 +105,8 @@ class PipelineContext:
         """Get the most recent version of tiles from the pipeline."""
         if self.processed_tiles:
             return self.processed_tiles
-        elif self.harmonized_tiles:
-            return self.harmonized_tiles
+        elif self.final_tiles:
+            return self.final_tiles
         elif self.generated_tiles:
             return self.generated_tiles
         else:
@@ -120,16 +120,26 @@ class PipelineContext:
     
     def mark_tile_for_regeneration(self, tile_id: int, reason: str):
         """Mark a tile for regeneration due to quality issues."""
-        if tile_id not in self.regeneration_queue:
-            self.regeneration_queue.append(tile_id)
-        
+        # Check if tile is already in queue
+        existing_entry = next((item for item in self.regeneration_queue if item["tile_id"] == tile_id), None)
+
+        if not existing_entry:
+            self.regeneration_queue.append({
+                "tile_id": tile_id,
+                "reason": reason,
+                "attempts": 0
+            })
+        else:
+            # Update reason if more specific
+            existing_entry["reason"] = f"{existing_entry['reason']}; {reason}"
+
         if tile_id not in self.constraint_violations:
             self.constraint_violations[tile_id] = []
         self.constraint_violations[tile_id].append(reason)
-        
-        logger.warning("Tile marked for regeneration", 
-                      tile_id=tile_id, 
-                      reason=reason, 
+
+        logger.warning("Tile marked for regeneration",
+                      tile_id=tile_id,
+                      reason=reason,
                       job_id=self.get_job_id())
     
     def get_pipeline_summary(self) -> Dict[str, Any]:
@@ -180,15 +190,15 @@ class PipelineContext:
             return False
         
         # Stage-specific validation
-        if expected_stage >= 2 and not self.universal_tileset:
+        if expected_stage >= 3 and not self.universal_tileset:
             self.add_error(expected_stage, "Universal tileset not generated")
             return False
-        
+
         if expected_stage >= 5 and not self.reference_maps:
             self.add_error(expected_stage, "Reference maps not generated")
             return False
-        
-        if expected_stage >= 6 and not self.generated_tiles:
+
+        if expected_stage >= 7 and not self.generated_tiles:
             self.add_error(expected_stage, "Tiles not generated")
             return False
         
