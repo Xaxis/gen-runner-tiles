@@ -153,9 +153,12 @@ class BrilliantFluxEngine:
         
         # Extract individual tiles
         individual_tiles = self._extract_coordinated_tiles(atlas_image)
-        
-        # Validate tessellation quality
-        tessellation_quality = self._validate_tessellation_quality(individual_tiles)
+
+        # Save debugging output
+        self._save_debugging_output(atlas_image, individual_tiles)
+
+        # Validate tessellation quality with detailed metrics
+        tessellation_quality = self._validate_tessellation_quality_detailed(individual_tiles)
         
         # Cleanup attention hooks
         self._cleanup_attention_hooks()
@@ -264,13 +267,107 @@ class BrilliantFluxEngine:
                    clip_under_limit=clip_tokens < 77,
                    conditioning_types=len(conditioning_data))
 
+        # Log actual prompt content for debugging
+        logger.info("CLIP prompt (77 token limit)", prompt=clip_prompt)
+        logger.info("T5 prompt (512 token capacity)", prompt=t5_prompt)
+
         return clip_prompt, t5_prompt
+
+    def _create_strong_control_image(self, conditioning_data: Dict[str, Image.Image]) -> Image.Image:
+        """Create STRONG multi-modal control image from ALL Stage 4 data."""
+        try:
+            # Start with edge data (strongest signal for tessellation)
+            if "edge" in conditioning_data:
+                control_image = conditioning_data["edge"].copy()
+                logger.info("Using edge data as primary control")
+            elif "structure" in conditioning_data:
+                control_image = conditioning_data["structure"].copy()
+                logger.info("Using structure data as primary control")
+            else:
+                # Fallback to first available
+                control_image = list(conditioning_data.values())[0].copy()
+                logger.info("Using fallback control data")
+
+            # Convert to numpy for blending
+            control_array = np.array(control_image, dtype=np.float32)
+
+            # Blend in structure data if available and different from primary
+            if "structure" in conditioning_data and "edge" in conditioning_data:
+                structure_array = np.array(conditioning_data["structure"], dtype=np.float32)
+                # 70% edge + 30% structure for strong tessellation guidance
+                control_array = control_array * 0.7 + structure_array * 0.3
+                logger.info("Blended edge + structure for stronger control")
+
+            # Convert back to PIL
+            control_array = np.clip(control_array, 0, 255).astype(np.uint8)
+            strong_control = Image.fromarray(control_array)
+
+            logger.info("Created STRONG multi-modal control image")
+            return strong_control
+
+        except Exception as e:
+            logger.warning("Failed to create strong control image", error=str(e))
+            # Fallback to first available
+            return list(conditioning_data.values())[0]
+
+    def _save_debugging_output(self, atlas_image: Image.Image, individual_tiles: Dict[int, Image.Image]):
+        """Save debugging output for visual inspection."""
+        try:
+            import os
+
+            # Create debug directory
+            debug_dir = f"../jobs/output/{self.context.get_job_id()}/debug"
+            os.makedirs(debug_dir, exist_ok=True)
+
+            # Save full atlas
+            atlas_image.save(f"{debug_dir}/atlas_full.png")
+
+            # Save individual tiles with clear naming
+            for tile_id, tile_img in individual_tiles.items():
+                tile_img.save(f"{debug_dir}/tile_{tile_id:02d}.png")
+
+            # Save tessellation test image (tiles arranged for visual inspection)
+            test_image = self._create_tessellation_test_image(individual_tiles)
+            test_image.save(f"{debug_dir}/tessellation_test.png")
+
+            logger.info("Debugging output saved", debug_dir=debug_dir, tiles_saved=len(individual_tiles))
+
+        except Exception as e:
+            logger.warning("Failed to save debugging output", error=str(e))
+
+    def _create_tessellation_test_image(self, tiles: Dict[int, Image.Image]) -> Image.Image:
+        """Create test image showing how tiles tessellate."""
+        try:
+            # Create 3x3 test pattern using available tiles
+            test_size = self.tile_size * 3
+            test_image = Image.new("RGB", (test_size, test_size), (128, 128, 128))
+
+            # Use first few tiles to create test pattern
+            available_tiles = list(tiles.values())[:9]
+
+            for i, tile in enumerate(available_tiles):
+                row = i // 3
+                col = i % 3
+                x = col * self.tile_size
+                y = row * self.tile_size
+                test_image.paste(tile, (x, y))
+
+            return test_image
+
+        except Exception as e:
+            logger.warning("Failed to create tessellation test", error=str(e))
+            return Image.new("RGB", (self.tile_size, self.tile_size), (255, 0, 0))
     
     def _generate_negative_prompt(self) -> str:
         """Generate comprehensive negative prompt."""
-        return ("blurry, smooth, anti-aliased, photorealistic, 3d render, low quality, "
-                "artifacts, seams, gaps, misaligned edges, inconsistent style, "
-                "non-tessellating, broken patterns")
+        negative_prompt = ("blurry, smooth, anti-aliased, photorealistic, 3d render, low quality, "
+                          "artifacts, seams, gaps, misaligned edges, inconsistent style, "
+                          "non-tessellating, broken patterns")
+
+        # Log negative prompt for debugging
+        logger.info("Negative prompt generated", prompt=negative_prompt)
+
+        return negative_prompt
     
     def _setup_realtime_attention_coordination(self):
         """Setup REAL-TIME attention coordination hooks in FLUX transformer."""
@@ -315,45 +412,167 @@ class BrilliantFluxEngine:
                 self.attention_hooks.append(hook)
                 hook_count += 1
         
-        logger.info("Real-time attention coordination setup complete", 
-                   hooks_registered=len(self.attention_hooks))
+        logger.info("PROPER FLUX attention coordination setup complete",
+                   hooks_registered=len(self.attention_hooks),
+                   shared_edges=len(self.shared_edges),
+                   coordination_method="cross_tile_seamless_blending")
     
     def _apply_attention_coordination(self, attention_output: torch.Tensor) -> torch.Tensor:
-        """Apply real-time attention coordination between tile edges."""
+        """PROPER FLUX attention coordination for seamless tessellation."""
         try:
-            # Validate input is a tensor
-            if not isinstance(attention_output, torch.Tensor):
-                logger.warning("Attention output is not a tensor", type=type(attention_output))
+            if not isinstance(attention_output, torch.Tensor) or len(attention_output.shape) != 3:
                 return attention_output
 
-            # Validate tensor has correct dimensions
-            if len(attention_output.shape) != 3:
-                logger.warning("Attention output has unexpected shape", shape=attention_output.shape)
-                return attention_output
-
-            # Get latent dimensions
             batch_size, seq_len, hidden_dim = attention_output.shape
-            
-            # Calculate latent atlas dimensions
-            latent_height = self.atlas_height // 8  # FLUX uses 8x downsampling
+
+            # Calculate spatial dimensions for FLUX (8x downsampling)
+            latent_height = self.atlas_height // 8
             latent_width = self.atlas_width // 8
-            latent_tile_size = self.tile_size // 8
-            
-            # Reshape to spatial dimensions if possible
-            if seq_len == latent_height * latent_width:
-                spatial_attention = attention_output.view(batch_size, latent_height, latent_width, hidden_dim)
-                
-                # Apply edge coordination between connecting tiles
-                coordinated_attention = self._coordinate_tile_edges(spatial_attention, latent_tile_size)
-                
-                # Reshape back
-                return coordinated_attention.view(batch_size, seq_len, hidden_dim)
-            
-            return attention_output
-            
+
+            # FLUX flattens spatial dimensions: seq_len should equal latent_height * latent_width
+            if seq_len != latent_height * latent_width:
+                return attention_output
+
+            # Reshape to spatial format for edge coordination
+            spatial_attention = attention_output.view(batch_size, latent_height, latent_width, hidden_dim)
+
+            # Apply REAL cross-tile edge coordination
+            coordinated_attention = self._apply_cross_tile_coordination(spatial_attention)
+
+            # Reshape back to sequence format
+            return coordinated_attention.view(batch_size, seq_len, hidden_dim)
+
         except Exception as e:
-            logger.warning("Attention coordination failed", error=str(e))
+            logger.warning("FLUX attention coordination failed", error=str(e))
             return attention_output
+
+    def _apply_cross_tile_coordination(self, spatial_attention: torch.Tensor) -> torch.Tensor:
+        """Apply cross-tile coordination for seamless tessellation like the guide shows."""
+        try:
+            batch_size, height, width, hidden_dim = spatial_attention.shape
+
+            # Calculate tile dimensions in latent space
+            latent_tile_height = self.tile_size // 8
+            latent_tile_width = self.tile_size // 8
+
+            # Process each shared edge for seamless connections
+            for shared_edge in self.shared_edges:
+                spatial_attention = self._coordinate_edge_attention(
+                    spatial_attention, shared_edge, latent_tile_height, latent_tile_width
+                )
+
+            return spatial_attention
+
+        except Exception as e:
+            logger.warning("Cross-tile coordination failed", error=str(e))
+            return spatial_attention
+
+    def _coordinate_edge_attention(self, spatial_attention: torch.Tensor, shared_edge: Any,
+                                 tile_height: int, tile_width: int) -> torch.Tensor:
+        """Coordinate attention between connecting tile edges for seamless tessellation."""
+        try:
+            tile_a_id = shared_edge.tile_a_id
+            tile_b_id = shared_edge.tile_b_id
+            edge_a = shared_edge.tile_a_edge
+            edge_b = shared_edge.tile_b_edge
+
+            # Get tile positions in latent space
+            pos_a = self._get_tile_latent_position(tile_a_id, tile_height, tile_width)
+            pos_b = self._get_tile_latent_position(tile_b_id, tile_height, tile_width)
+
+            if pos_a is None or pos_b is None:
+                return spatial_attention
+
+            # Extract edge regions from both tiles
+            edge_region_a = self._extract_latent_edge_region(spatial_attention, pos_a, edge_a, tile_height, tile_width)
+            edge_region_b = self._extract_latent_edge_region(spatial_attention, pos_b, edge_b, tile_height, tile_width)
+
+            if edge_region_a.shape != edge_region_b.shape:
+                return spatial_attention
+
+            # Apply seamless blending for perfect tessellation
+            blended_edge = self._blend_edge_attention(edge_region_a, edge_region_b)
+
+            # Apply blended attention back to both tiles
+            spatial_attention = self._apply_blended_edge_attention(
+                spatial_attention, pos_a, edge_a, blended_edge, tile_height, tile_width
+            )
+            spatial_attention = self._apply_blended_edge_attention(
+                spatial_attention, pos_b, edge_b, blended_edge, tile_height, tile_width
+            )
+
+            return spatial_attention
+
+        except Exception as e:
+            logger.warning("Edge attention coordination failed", error=str(e))
+            return spatial_attention
+
+    def _get_tile_latent_position(self, tile_id: int, tile_height: int, tile_width: int) -> Optional[Tuple[int, int, int, int]]:
+        """Get tile position in latent space coordinates."""
+        row = tile_id // self.atlas_columns
+        col = tile_id % self.atlas_columns
+
+        if row >= self.atlas_rows:
+            return None
+
+        y1 = row * tile_height
+        x1 = col * tile_width
+        y2 = y1 + tile_height
+        x2 = x1 + tile_width
+
+        return (y1, x1, y2, x2)
+
+    def _extract_latent_edge_region(self, spatial_attention: torch.Tensor, pos: Tuple[int, int, int, int],
+                                   direction: str, tile_height: int, tile_width: int) -> torch.Tensor:
+        """Extract edge region from latent attention for seamless blending."""
+        y1, x1, y2, x2 = pos
+        edge_thickness = max(1, min(tile_height, tile_width) // 8)  # Adaptive edge thickness
+
+        if direction == "top":
+            return spatial_attention[:, y1:y1+edge_thickness, x1:x2, :].clone()
+        elif direction == "bottom":
+            return spatial_attention[:, y2-edge_thickness:y2, x1:x2, :].clone()
+        elif direction == "left":
+            return spatial_attention[:, y1:y2, x1:x1+edge_thickness, :].clone()
+        elif direction == "right":
+            return spatial_attention[:, y1:y2, x2-edge_thickness:x2, :].clone()
+        else:
+            return spatial_attention[:, y1:y2, x1:x2, :].clone()
+
+    def _blend_edge_attention(self, edge_a: torch.Tensor, edge_b: torch.Tensor) -> torch.Tensor:
+        """Blend edge attention for seamless tessellation like the guide shows."""
+        # Weighted blending with slight randomization to avoid artifacts
+        weight_a = 0.5 + torch.randn(1).item() * 0.1  # 0.4 to 0.6
+        weight_b = 1.0 - weight_a
+
+        # Ensure weights are positive and sum to 1
+        weight_a = max(0.3, min(0.7, weight_a))
+        weight_b = 1.0 - weight_a
+
+        return edge_a * weight_a + edge_b * weight_b
+
+    def _apply_blended_edge_attention(self, spatial_attention: torch.Tensor, pos: Tuple[int, int, int, int],
+                                    direction: str, blended_edge: torch.Tensor,
+                                    tile_height: int, tile_width: int) -> torch.Tensor:
+        """Apply blended edge attention back to spatial attention."""
+        try:
+            y1, x1, y2, x2 = pos
+            edge_thickness = max(1, min(tile_height, tile_width) // 8)
+
+            if direction == "top":
+                spatial_attention[:, y1:y1+edge_thickness, x1:x2, :] = blended_edge
+            elif direction == "bottom":
+                spatial_attention[:, y2-edge_thickness:y2, x1:x2, :] = blended_edge
+            elif direction == "left":
+                spatial_attention[:, y1:y2, x1:x1+edge_thickness, :] = blended_edge
+            elif direction == "right":
+                spatial_attention[:, y1:y2, x2-edge_thickness:x2, :] = blended_edge
+
+            return spatial_attention
+
+        except Exception as e:
+            logger.warning("Failed to apply blended edge attention", error=str(e))
+            return spatial_attention
     
     def _coordinate_tile_edges(self, spatial_attention: torch.Tensor, latent_tile_size: int) -> torch.Tensor:
         """Coordinate edges between connecting tiles in attention space."""
@@ -459,14 +678,22 @@ class BrilliantFluxEngine:
         with torch.no_grad():
             # Check if pipeline supports ControlNet
             if hasattr(self.pipeline, 'controlnet') and self.pipeline.controlnet is not None:
-                # Use FLUX ControlNet with Stage 4 edge conditioning
-                control_image = conditioning_data.get("edge", conditioning_data.get("structure"))
+                # Create STRONG multi-modal control image
+                control_image = self._create_strong_control_image(conditioning_data)
+
+                # Log generation parameters
+                logger.info("Starting ControlNet generation",
+                           prompt_used="CLIP_prompt",
+                           prompt_content=clip_prompt,
+                           controlnet_scale=1.0,
+                           steps=self.steps,
+                           guidance_scale=self.guidance_scale)
 
                 result = self.pipeline(
                     prompt=clip_prompt,  # Use SHORT prompt for CLIP (77 tokens)
                     negative_prompt=negative_prompt,
-                    control_image=control_image,  # REAL Stage 4 conditioning!
-                    controlnet_conditioning_scale=0.8,  # Strong structure control
+                    control_image=control_image,  # STRONG multi-modal conditioning!
+                    controlnet_conditioning_scale=1.0,  # MAXIMUM structure control
                     height=self.atlas_height,
                     width=self.atlas_width,
                     num_inference_steps=self.steps,
@@ -474,9 +701,16 @@ class BrilliantFluxEngine:
                     generator=generator,
                     output_type="pil"
                 )
-                logger.info("Generated atlas using FLUX ControlNet with Stage 4 conditioning")
+                logger.info("Generated atlas using STRONG ControlNet conditioning")
 
             else:
+                # Log fallback generation parameters
+                logger.info("Starting text-only generation (ControlNet fallback)",
+                           prompt_used="CLIP_prompt",
+                           prompt_content=clip_prompt,
+                           steps=self.steps,
+                           guidance_scale=self.guidance_scale)
+
                 # Fallback to text-only generation
                 result = self.pipeline(
                     prompt=clip_prompt,  # Use SHORT prompt for CLIP (77 tokens)
@@ -522,6 +756,86 @@ class BrilliantFluxEngine:
 
         logger.info("Extracted coordinated tiles", tile_count=len(tiles))
         return tiles
+
+    def _validate_tessellation_quality_detailed(self, tiles: Dict[int, Image.Image]) -> float:
+        """Detailed tessellation quality validation with pixel-level analysis."""
+        if not self.shared_edges:
+            return 1.0
+
+        total_similarity = 0.0
+        edge_count = 0
+        edge_details = []
+
+        for shared_edge in self.shared_edges:
+            tile_a_id = shared_edge.tile_a_id
+            tile_b_id = shared_edge.tile_b_id
+
+            if tile_a_id not in tiles or tile_b_id not in tiles:
+                continue
+
+            # Calculate detailed edge similarity
+            similarity = self._calculate_detailed_edge_similarity(
+                tiles[tile_a_id], tiles[tile_b_id],
+                shared_edge.tile_a_edge, shared_edge.tile_b_edge
+            )
+
+            edge_details.append({
+                "tiles": f"{tile_a_id}-{tile_b_id}",
+                "edges": f"{shared_edge.tile_a_edge}-{shared_edge.tile_b_edge}",
+                "similarity": similarity
+            })
+
+            total_similarity += similarity
+            edge_count += 1
+
+        average_similarity = total_similarity / edge_count if edge_count > 0 else 1.0
+
+        # Log detailed results
+        logger.info("DETAILED tessellation validation",
+                   average_similarity=average_similarity,
+                   edges_validated=edge_count,
+                   worst_edge=min(edge_details, key=lambda x: x["similarity"]) if edge_details else None)
+
+        return average_similarity
+
+    def _calculate_detailed_edge_similarity(self, tile_a: Image.Image, tile_b: Image.Image,
+                                          edge_a: str, edge_b: str) -> float:
+        """Calculate detailed edge similarity with pixel-level analysis."""
+        try:
+            # Extract edge regions
+            edge_region_a = self._extract_edge_region(tile_a, edge_a)
+            edge_region_b = self._extract_edge_region(tile_b, edge_b)
+
+            # Convert to numpy
+            array_a = np.array(edge_region_a, dtype=np.float32)
+            array_b = np.array(edge_region_b, dtype=np.float32)
+
+            if array_a.shape != array_b.shape:
+                return 0.0
+
+            # Multiple similarity metrics
+            mse = np.mean((array_a - array_b) ** 2)
+            max_possible_mse = 255 ** 2
+            mse_similarity = 1.0 - (mse / max_possible_mse)
+
+            # Structural similarity (simplified SSIM)
+            mean_a = np.mean(array_a)
+            mean_b = np.mean(array_b)
+            var_a = np.var(array_a)
+            var_b = np.var(array_b)
+            covar = np.mean((array_a - mean_a) * (array_b - mean_b))
+
+            structural_similarity = (2 * mean_a * mean_b + 1) * (2 * covar + 1) / \
+                                  ((mean_a**2 + mean_b**2 + 1) * (var_a + var_b + 1))
+
+            # Combined similarity
+            combined_similarity = (mse_similarity * 0.7 + structural_similarity * 0.3)
+
+            return max(0.0, combined_similarity)
+
+        except Exception as e:
+            logger.warning("Detailed edge similarity failed", error=str(e))
+            return 0.0
 
     def _validate_tessellation_quality(self, tiles: Dict[int, Image.Image]) -> float:
         """Validate tessellation quality with mathematical precision."""
