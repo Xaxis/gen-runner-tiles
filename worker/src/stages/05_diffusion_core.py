@@ -230,11 +230,11 @@ class RealMultiTileDiffusionEngine:
         theme = self.config.get("theme", "fantasy")
         palette = self.config.get("palette", "medieval")
         
-        # Base prompt for theme with retro pixel style
+        # Enhanced pixel art prompts (compensating for lack of FLUX-compatible LoRA)
         base_prompts = {
-            "fantasy": f"retro pixel art fantasy {palette} tileable texture, 16-bit style, seamless pattern, game asset",
-            "sci_fi": f"retro pixel art sci-fi {palette} tileable texture, 8-bit futuristic style, seamless pattern, game asset",
-            "modern": f"retro pixel art modern {palette} tileable texture, pixel style, seamless pattern, game asset"
+            "fantasy": f"pixel art, 16-bit retro style, fantasy {palette} tileable texture, seamless repeating pattern, crisp pixels, no blur, sharp edges, classic video game aesthetic, detailed pixel work, game asset",
+            "sci_fi": f"pixel art, 8-bit retro style, sci-fi {palette} tileable texture, seamless repeating pattern, crisp pixels, no blur, sharp edges, retro futuristic aesthetic, detailed pixel work, game asset",
+            "modern": f"pixel art, 16-bit style, modern {palette} tileable texture, seamless repeating pattern, crisp pixels, no blur, sharp edges, contemporary pixel aesthetic, detailed pixel work, game asset"
         }
 
         base_prompt = base_prompts.get(theme, base_prompts["fantasy"])

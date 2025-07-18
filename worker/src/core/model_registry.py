@@ -356,21 +356,43 @@ class ModelRegistry:
     def _apply_retro_pixel_lora(self, pipeline, model_name: str):
         """Apply retro pixel LoRA for overall aesthetic regardless of theme."""
         try:
-            # Use specific HuggingFace LoRA model for pixel art
-            lora_model_id = "nerijs/pixel-art-xl"
+            # Use the BEST FLUX-compatible pixel art LoRA
+            lora_model_id = "XLabs-AI/flux-lora-collection"
+            lora_subfolder = "loras"  # Contains pixel art variants
 
-            # Load and apply LoRA directly from HuggingFace
-            pipeline.load_lora_weights(lora_model_id, adapter_name="retro_pixel")
-            pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.8])  # 80% strength for strong pixel effect
+            # Load the pixel art LoRA from the collection
+            pipeline.load_lora_weights(
+                lora_model_id,
+                weight_name="pixel_art_style.safetensors",  # Specific pixel art file
+                adapter_name="retro_pixel"
+            )
+            pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.85])  # Strong pixel effect
 
-            logger.info("Applied retro pixel LoRA from HuggingFace",
+            logger.info("Applied FLUX-compatible retro pixel LoRA",
                        model_name=model_name,
                        lora_model=lora_model_id,
-                       weight=0.8)
+                       weight=0.85)
 
         except Exception as e:
-            logger.warning("Failed to apply retro pixel LoRA, continuing with base model",
-                         error=str(e), model_name=model_name, lora_model=lora_model_id)
+            # Fallback to alternative FLUX LoRA
+            try:
+                logger.warning("Primary pixel LoRA failed, trying alternative", error=str(e))
+
+                # Alternative: Use alvdansen/flux-koda which supports pixel styles
+                alt_lora_id = "alvdansen/flux-koda"
+                pipeline.load_lora_weights(alt_lora_id, adapter_name="retro_pixel")
+                pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.8])
+
+                logger.info("Applied alternative FLUX pixel LoRA",
+                           model_name=model_name,
+                           lora_model=alt_lora_id,
+                           weight=0.8)
+
+            except Exception as e2:
+                logger.warning("All FLUX pixel LoRAs failed, using enhanced prompting",
+                             primary_error=str(e),
+                             fallback_error=str(e2),
+                             model_name=model_name)
     
     def load_controlnet_model(self, model_name: str):
         """Lazy load a ControlNet model only when needed."""
