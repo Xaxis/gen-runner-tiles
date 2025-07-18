@@ -208,7 +208,7 @@ class JobProcessor:
         # Extract model configuration
         model_config = job_spec.get("modelConfig", {})
         config["models"] = {
-            "base_model": model_config.get("baseModel", "flux-dev"),
+            "base_model": model_config.get("base_model", "flux-dev"),
             "controlnet_model": model_config.get("controlnetModel"),
             "use_controlnet": model_config.get("useControlNet", True),
             "precision": model_config.get("precision", "bfloat16"),

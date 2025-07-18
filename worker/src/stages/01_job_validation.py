@@ -69,12 +69,7 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
         validation_errors.extend(theme_validation["errors"])
         validation_warnings.extend(theme_validation["warnings"])
         
-        # 5. Validate tile parameters and constraints
-        tile_validation = _validate_tile_parameters(extracted_config)
-        validation_errors.extend(tile_validation["errors"])
-        validation_warnings.extend(tile_validation["warnings"])
-        
-        # 6. Validate output directory and permissions
+        # 5. Validate output directory and permissions
         output_validation = _validate_output_directory(context.output_path)
         validation_errors.extend(output_validation["errors"])
         validation_warnings.extend(output_validation["warnings"])
@@ -115,8 +110,9 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
             "validation_summary": {
                 "theme": extracted_config["theme"],
                 "palette": extracted_config["palette"],
-                "tileset_type": extracted_config["tileset_type"],
                 "tile_size": extracted_config["tile_size"],
+                "tileset_type": extracted_config["tileset_type"],
+                "view_angle": extracted_config["view_angle"],
                 "base_model": extracted_config["base_model"],
             }
         }
@@ -133,7 +129,7 @@ def _validate_basic_job_spec(job_spec: Dict[str, Any]) -> Dict[str, List[str]]:
     warnings = []
     
     # Required fields
-    required_fields = ["id", "theme", "palette", "tileSize", "tileset_type", "createdAt"]
+    required_fields = ["id", "theme", "palette", "tile_size", "tileset_type", "view_angle", "created_at"]
     for field in required_fields:
         if field not in job_spec:
             errors.append(f"Missing required field: {field}")
@@ -143,10 +139,10 @@ def _validate_basic_job_spec(job_spec: Dict[str, Any]) -> Dict[str, List[str]]:
         errors.append("Job ID must be a string")
     
     # Validate timestamps
-    if "createdAt" in job_spec:
+    if "created_at" in job_spec:
         try:
             from datetime import datetime
-            datetime.fromisoformat(job_spec["createdAt"].replace('Z', '+00:00'))
+            datetime.fromisoformat(job_spec["created_at"].replace('Z', '+00:00'))
         except (ValueError, AttributeError):
             errors.append("Invalid createdAt timestamp format")
     
@@ -157,8 +153,8 @@ def _validate_extracted_config(config: Dict[str, Any]) -> Dict[str, List[str]]:
     errors = []
     warnings = []
     
-    # Validate tile size (sub_tile_size is now calculated by Stage 2)
-    tile_size = config.get("tileSize", 0)  # Match JobSpec field name
+    # Validate tile size
+    tile_size = config.get("tile_size", 0)
 
     # Validate tile size is supported
     valid_tile_sizes = [32, 64, 128, 256, 512]
@@ -171,16 +167,6 @@ def _validate_extracted_config(config: Dict[str, Any]) -> Dict[str, List[str]]:
     if tileset_type not in valid_tileset_types:
         errors.append(f"Invalid tileset type '{tileset_type}'. Must be one of: {valid_tileset_types}")
     
-    # Validate constraints
-    constraints = config.get("constraints", {})
-    edge_similarity = constraints.get("edge_similarity", 0)
-    if not (0 <= edge_similarity <= 1):
-        errors.append(f"Edge similarity {edge_similarity} must be between 0 and 1")
-    
-    palette_deviation = constraints.get("palette_deviation", 0)
-    if not (0 <= palette_deviation <= 10):
-        errors.append(f"Palette deviation {palette_deviation} must be between 0 and 10")
-    
     return {"errors": errors, "warnings": warnings}
 
 def _validate_model_availability(config: Dict[str, Any]) -> Dict[str, List[str]]:
@@ -190,29 +176,20 @@ def _validate_model_availability(config: Dict[str, Any]) -> Dict[str, List[str]]
     
     try:
         model_registry = ModelRegistry()
-        
+
         # Validate base model
-        base_model = config.get("models", {}).get("base_model")
+        base_model = config.get("base_model")
         if not base_model:
             errors.append("No base model specified")
         elif not model_registry.get_model_config(base_model):
             errors.append(f"Base model '{base_model}' not found in registry")
-        
-        # Validate ControlNet model if enabled
-        use_controlnet = config.get("models", {}).get("use_controlnet", False)
-        if use_controlnet:
-            controlnet_model = config.get("models", {}).get("controlnet_model")
-            if not controlnet_model:
-                warnings.append("ControlNet enabled but no model specified, will use default")
-            elif not model_registry.get_model_config(controlnet_model):
-                errors.append(f"ControlNet model '{controlnet_model}' not found in registry")
-        
-        # Validate theme configuration
+
+        # Validate model compatibility with theme configuration
         theme = config.get("theme")
         if theme and not model_registry.get_theme_config(theme):
             errors.append(f"Theme '{theme}' not found in registry")
-        
-        # Validate palette configuration
+
+        # Validate model compatibility with palette configuration
         palette = config.get("palette")
         if palette and not model_registry.get_palette_config(palette):
             errors.append(f"Palette '{palette}' not found in registry")
@@ -246,28 +223,12 @@ def _validate_theme_palette_config(config: Dict[str, Any]) -> Dict[str, List[str
                     warnings.append("Earth palette with sci-fi theme may not match aesthetic")
                 
                 # Validate generation parameters
-                base_model = config.get("models", {}).get("base_model")
+                base_model = config.get("base_model")
                 if base_model != theme_config.base_model:
                     warnings.append(f"Using {base_model} instead of recommended {theme_config.base_model} for {theme_name} theme")
                     
     except Exception as e:
         errors.append(f"Theme/palette validation failed: {str(e)}")
-    
-    return {"errors": errors, "warnings": warnings}
-
-def _validate_tile_parameters(config: Dict[str, Any]) -> Dict[str, List[str]]:
-    """Validate tile parameters and building block configuration."""
-    errors = []
-    warnings = []
-    
-    # Tileset configuration is now handled by tileset_type
-    # No need to validate building blocks since they're determined by tessellation requirements
-    
-    # Validate atlas configuration
-    atlas_config = config.get("atlas", {})
-    max_size = atlas_config.get("max_size", 2048)
-    if max_size not in [256, 512, 1024, 2048, 4096, 8192]:
-        warnings.append(f"Atlas max size {max_size} is not a standard power-of-two size")
     
     return {"errors": errors, "warnings": warnings}
 
@@ -327,7 +288,8 @@ def _create_validated_job_spec(job_spec: Dict[str, Any], config: Dict[str, Any])
         tile_count = tessellation_counts.get(tileset_type, 13)
         columns = int(tile_count ** 0.5) + (1 if tile_count ** 0.5 != int(tile_count ** 0.5) else 0)
         rows = (tile_count + columns - 1) // columns
-        
+
+        # @TODO - Don't think this is being used anywhere, verify
         validated_spec["atlasLayout"] = {
             "columns": columns,
             "rows": rows,
@@ -341,15 +303,13 @@ def _create_validated_job_spec(job_spec: Dict[str, Any], config: Dict[str, Any])
 def _extract_configuration_from_job_spec(job_spec: Dict[str, Any]) -> Dict[str, Any]:
     """Extract and normalize configuration from job specification."""
 
-    # Extract basic configuration (simplified for refactored pipeline)
     extracted_config = {
         "theme": job_spec.get("theme", "fantasy"),
         "palette": job_spec.get("palette", "default"),
-        "tileSize": job_spec.get("tileSize", 64),  # Match JobSpec field name
+        "tile_size": job_spec.get("tile_size", 64),
         "tileset_type": job_spec.get("tileset_type", "minimal"),
-        "viewAngle": job_spec.get("viewAngle", "top-down"),
-        "baseModel": job_spec.get("baseModel", "flux-dev"),
-        # sub_tile_size is now calculated by Stage 2
+        "view_angle": job_spec.get("view_angle", "top-down"),
+        "base_model": job_spec.get("baseModel", "flux-dev"),
 
     }
 

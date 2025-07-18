@@ -4,6 +4,7 @@ torchvision>=0.15.0
 diffusers>=0.21.0
 transformers>=4.30.0
 accelerate>=0.20.0
+sentencepiece>=0.1.99  # Required for FLUX tokenizer
 
 # Image processing
 Pillow>=10.0.0

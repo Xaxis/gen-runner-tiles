@@ -52,7 +52,7 @@ class TilesetSetup:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.tile_size = config.get("tileSize", 64)  # Match JobSpec field name
+        self.tile_size = config.get("tile_size", 64)  # Match JobSpec field name
         self.tileset_type = config.get("tileset_type", "minimal")
 
         # Calculate optimal sub_tile_size based on tileset_type and tile_size
@@ -290,47 +290,106 @@ class TilesetSetup:
 
     def _generate_shared_edges(self):
         """Generate shared edges between tiles that must match exactly."""
-        # For minimal tessellation, we need to define which tiles can connect
-        # This is based on matching edge patterns
+        # For minimal tessellation, define explicit connectivity patterns
+        # This ensures proper tessellation where tiles can actually connect
 
+        if self.tileset_type == "minimal":
+            self._setup_minimal_connectivity()
+        else:
+            # For extended/full, use pattern matching
+            self._setup_pattern_based_connectivity()
+
+    def _setup_minimal_connectivity(self):
+        """Set up explicit connectivity for minimal 13-tile set."""
+        # Define which tiles connect to which for proper tessellation
+        # Corners connect to edges and T-junctions
+        # Edges connect to corners, T-junctions, and cross
+        # T-junctions connect to everything
+        # Cross connects to everything
+
+        connectivity_rules = {
+            # Corners (tile_ids 0-3) - only connect in their connectivity directions
+            0: {"right": 7, "top": 4},      # corner_ne -> edge_east, edge_north
+            1: {"left": 6, "top": 4},       # corner_nw -> edge_west, edge_north
+            2: {"right": 7, "bottom": 5},   # corner_se -> edge_east, edge_south
+            3: {"left": 6, "bottom": 5},    # corner_sw -> edge_west, edge_south
+
+            # Edges (tile_ids 4-7) - DON'T connect in their edge direction!
+            4: {},  # edge_north (top) - no neighbors, it's a dead end
+            5: {},  # edge_south (bottom) - no neighbors, it's a dead end
+            6: {},  # edge_west (left) - no neighbors, it's a dead end
+            7: {},  # edge_east (right) - no neighbors, it's a dead end
+
+            # T-junctions (tile_ids 8-11) connect to cross and edges
+            8: {"left": 6, "right": 7, "bottom": 5},    # t_north -> edges
+            9: {"left": 6, "right": 7, "top": 4},       # t_south -> edges
+            10: {"top": 4, "bottom": 5, "right": 7},    # t_east -> edges
+            11: {"top": 4, "bottom": 5, "left": 6},     # t_west -> edges
+
+            # Cross (tile_id 12) connects to all T-junctions
+            12: {"top": 9, "bottom": 8, "left": 11, "right": 10}  # cross -> t-junctions
+        }
+
+        # Apply connectivity rules
+        for tile_id, connections in connectivity_rules.items():
+            if tile_id in self.tile_specs:
+                tile_spec = self.tile_specs[tile_id]
+                for direction, neighbor_id in connections.items():
+                    if direction in tile_spec.connectivity_pattern:
+                        # Set neighbor
+                        tile_spec.neighbors[direction] = neighbor_id
+
+                        # Create shared edge
+                        opposite_direction = self._get_opposite_direction(direction)
+                        pattern_id = tile_spec.edge_patterns[direction]
+
+                        shared_edge = SharedEdge(
+                            tile_a_id=tile_id,
+                            tile_a_edge=direction,
+                            tile_b_id=neighbor_id,
+                            tile_b_edge=opposite_direction,
+                            edge_length=self.tile_size,
+                            pattern_id=pattern_id
+                        )
+
+                        self.shared_edges.append(shared_edge)
+                        tile_spec.shared_edges.append(shared_edge)
+
+    def _setup_pattern_based_connectivity(self):
+        """Set up connectivity based on pattern matching for extended/full sets."""
+        # This is the original pattern-based approach for complex tilesets
         for tile_id, tile_spec in self.tile_specs.items():
             for direction in tile_spec.connectivity_pattern:
-                pattern_id = tile_spec.edge_patterns[direction]
+                if direction not in tile_spec.neighbors:  # Only if not already set
+                    pattern_id = tile_spec.edge_patterns[direction]
 
-                # Find other tiles with matching edge patterns
-                matching_tiles = []
-                opposite_direction = self._get_opposite_direction(direction)
+                    # Find matching tiles
+                    opposite_direction = self._get_opposite_direction(direction)
 
-                for other_id, other_spec in self.tile_specs.items():
-                    if other_id != tile_id and opposite_direction in other_spec.connectivity_pattern:
-                        other_pattern = other_spec.edge_patterns[opposite_direction]
-                        if self._patterns_can_connect(pattern_id, other_pattern):
-                            matching_tiles.append(other_id)
+                    for other_id, other_spec in self.tile_specs.items():
+                        if (other_id != tile_id and
+                            opposite_direction in other_spec.connectivity_pattern and
+                            opposite_direction not in other_spec.neighbors):
 
-                # Create shared edges with the first matching tile (for minimal set)
-                if matching_tiles:
-                    neighbor_id = matching_tiles[0]
+                            other_pattern = other_spec.edge_patterns[opposite_direction]
+                            if self._patterns_can_connect(pattern_id, other_pattern):
+                                # Create connection
+                                tile_spec.neighbors[direction] = other_id
+                                other_spec.neighbors[opposite_direction] = tile_id
 
-                    # Create shared edge specification
-                    shared_edge = SharedEdge(
-                        tile_a_id=tile_id,
-                        tile_a_edge=direction,
-                        tile_b_id=neighbor_id,
-                        tile_b_edge=opposite_direction,
-                        edge_length=self.tile_size,
-                        pattern_id=pattern_id
-                    )
+                                shared_edge = SharedEdge(
+                                    tile_a_id=tile_id,
+                                    tile_a_edge=direction,
+                                    tile_b_id=other_id,
+                                    tile_b_edge=opposite_direction,
+                                    edge_length=self.tile_size,
+                                    pattern_id=pattern_id
+                                )
 
-                    self.shared_edges.append(shared_edge)
-
-                    # Update neighbors
-                    tile_spec.neighbors[direction] = neighbor_id
-                    tile_spec.shared_edges.append(shared_edge)
-
-                    # Update the neighbor's data too
-                    neighbor_spec = self.tile_specs[neighbor_id]
-                    neighbor_spec.neighbors[opposite_direction] = tile_id
-                    neighbor_spec.shared_edges.append(shared_edge)
+                                self.shared_edges.append(shared_edge)
+                                tile_spec.shared_edges.append(shared_edge)
+                                other_spec.shared_edges.append(shared_edge)
+                                break
 
     def _get_opposite_direction(self, direction: str) -> str:
         """Get the opposite direction for edge matching."""

@@ -11,6 +11,18 @@ from dataclasses import dataclass, asdict
 import torch
 import structlog
 
+# Initialize accelerate environment for CPU offloading on MacBook
+try:
+    import accelerate
+    from accelerate import Accelerator
+    # Initialize accelerator globally
+    accelerator = Accelerator()
+    ACCELERATE_AVAILABLE = True
+    logger.info("Accelerate initialized successfully for CPU offloading")
+except Exception as e:
+    ACCELERATE_AVAILABLE = False
+    logger.warning("Failed to initialize accelerate", error=str(e))
+
 logger = structlog.get_logger()
 
 @dataclass
@@ -51,12 +63,7 @@ class PaletteConfig:
 class ModelRegistry:
     """Registry for lazy loading of models, themes, and palettes."""
     
-    def __init__(self, data_dir: str = None):
-        # Use global HuggingFace cache directory - no local storage!
-        # Models are cached globally by HuggingFace, configs come from jobs
-        self.data_dir = None  # No local data directory needed
-        self.models_dir = None  # Models stored globally by HuggingFace
-        self.config_dir = None  # Configs come from job specs
+    def __init__(self):
 
         # Model configurations (lightweight - no actual models loaded)
         self.model_configs: Dict[str, ModelConfig] = {}
@@ -71,7 +78,7 @@ class ModelRegistry:
     # TODO: Move to external config file
     def _initialize_default_configs(self):
         """Initialize default model, theme, and palette configurations."""
-        
+
         # Base diffusion models
         self.model_configs.update({
             "flux-dev": ModelConfig(
@@ -285,8 +292,17 @@ class ModelRegistry:
         logger.info("Loading base model", model_name=model_name, model_id=config.model_id)
         
         try:
+            # Check for required dependencies first
+            try:
+                import sentencepiece
+            except ImportError:
+                raise ImportError(
+                    "sentencepiece is required for FLUX models. "
+                    "Install it with: pip install sentencepiece"
+                )
+
             from diffusers import FluxPipeline
-            
+
             # Determine torch dtype
             torch_dtype = getattr(torch, config.precision)
             
@@ -308,8 +324,16 @@ class ModelRegistry:
                 # Uses global HuggingFace cache automatically
             )
             
-            if config.enable_cpu_offload:
-                pipeline.enable_model_cpu_offload()
+            if config.enable_cpu_offload and ACCELERATE_AVAILABLE:
+                try:
+                    # Use model CPU offloading with global accelerator
+                    pipeline.enable_model_cpu_offload()
+                    logger.info("CPU offloading enabled successfully", model_name=model_name)
+                except Exception as e:
+                    logger.warning("CPU offloading failed, continuing without it",
+                                 model_name=model_name, error=str(e))
+            elif config.enable_cpu_offload and not ACCELERATE_AVAILABLE:
+                logger.warning("CPU offloading requested but accelerate not available", model_name=model_name)
             
             self.loaded_models[model_name] = pipeline
             logger.info("Base model loaded successfully", model_name=model_name)

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { generateCommand } from './commands/generate';
@@ -19,10 +18,9 @@ program
   .description('Generate a new tileset')
   .option('-t, --theme <theme>', 'Theme for the tileset (e.g., fantasy, sci-fi)')
   .option('-p, --palette <palette>', 'Color palette name')
-  .option('-s, --size <size>', 'Tile size in pixels', '32')
-  .option('--tileset <type>', 'Tileset type (minimal, extended, full)', 'minimal')
-  .option('--base-model <model>', 'Base model to use (flux-dev, flux-schnell)', 'flux-dev')
-  .option('--watch', 'Watch generation progress in real-time')
+  .option('-s, --tile-size <tile-size>', 'Tile size in pixels', '32')
+  .option('--tileset-type <tileset-type>', 'Tileset type (minimal, extended, full)', 'minimal')
+  .option('--base-model <base-model>', 'Base model to use (flux-dev, flux-schnell)', 'flux-dev')
   .action(generateCommand);
 
 program

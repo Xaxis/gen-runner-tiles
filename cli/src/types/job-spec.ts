@@ -2,11 +2,15 @@ import { z } from 'zod';
 
 export const JobSpecSchema = z.object({
   id: z.string(),
+
+  // Style configuration
   theme: z.string(),
+
+  // Color palette configuration
   palette: z.string(),
 
   // Tessellation configuration
-  tileSize: z.number().min(32).max(512).refine(val => [32, 64, 128, 256, 512].includes(val), {
+  tile_size: z.number().min(32).max(512).refine(val => [32, 64, 128, 256, 512].includes(val), {
     message: "tileSize must be one of: 32, 64, 128, 256, 512"
   }),
 
@@ -14,12 +18,12 @@ export const JobSpecSchema = z.object({
   tileset_type: z.enum(['minimal', 'extended', 'full']).default('minimal'),
 
   // View configuration
-  viewAngle: z.enum(['top-down', 'isometric', 'side-view']).default('top-down'),
+  view_angle: z.enum(['top-down', 'isometric', 'side-view']).default('top-down'),
 
   // Model configuration (simplified)
-  baseModel: z.enum(['flux-dev', 'flux-schnell']).default('flux-dev'),
+  base_model: z.enum(['flux-dev', 'flux-schnell']).default('flux-dev'),
 
-  createdAt: z.string().datetime(),
+  created_at: z.string().datetime(),
 });
 
 export type JobSpec = z.infer<typeof JobSpecSchema>;

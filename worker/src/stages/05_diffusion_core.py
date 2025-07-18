@@ -68,17 +68,20 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
             reference_maps=reference_maps,
             control_images=control_images
         )
-        
+
         # Store results in context
         context.generated_tiles = generation_result["tiles"]
         context.generation_metadata = generation_result["metadata"]
-        
-        logger.info("FULL multi-tile diffusion completed", 
+
+        # Update context stage on success
+        context.current_stage = 5
+
+        logger.info("FULL multi-tile diffusion completed",
                    job_id=context.get_job_id(),
                    tiles_generated=len(generation_result["tiles"]),
                    edge_copy_operations=generation_result["edge_copy_operations"],
                    cross_tile_attention_steps=generation_result["cross_tile_attention_steps"])
-        
+
         return {
             "success": True,
             "generated_tiles": generation_result["tiles"],
@@ -89,7 +92,7 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
                 "edge_copy_operations": generation_result["edge_copy_operations"],
                 "cross_tile_attention_steps": generation_result["cross_tile_attention_steps"],
                 "circular_padding_enabled": generation_result["circular_padding_enabled"],
-                "model_used": extracted_config["models"]["base_model"]
+                "model_used": extracted_config.get("base_model", "flux-dev")
             }
         }
         
@@ -128,8 +131,9 @@ class FullMultiTileDiffusionEngine:
         self.seed = config.get("seed")  # Optional seed
 
         # Model configuration (simplified)
-        self.base_model_name = config.get("baseModel", "flux-dev")
+        self.base_model_name = config.get("base_model", "flux-dev")
         self.use_controlnet = True  # Always use ControlNet for tessellation
+        self.controlnet_model_name = "flux-controlnet-union"  # Default ControlNet for FLUX
         
         # FULL multi-tile coordination parameters (using calculated sub-tile precision)
         self.cross_tile_attention_window = self.sub_tile_size  # Overlap = sub-tile size

@@ -23,14 +23,14 @@ export async function generateCommand(options: GenerateOptions): Promise<void> {
     // Build job specification
     console.log(chalk.gray('Building job specification...'));
     const jobSpec = JobBuilder.build(options);
-    
+
     console.log(chalk.gray(`Job ID: ${jobSpec.id}`));
     console.log(chalk.gray(`Theme: ${jobSpec.theme}`));
     console.log(chalk.gray(`Palette: ${jobSpec.palette}`));
-    console.log(chalk.gray(`Tile Size: ${jobSpec.tileSize}px`));
+    console.log(chalk.gray(`Tile Size: ${jobSpec.tile_size}`));
     console.log(chalk.gray(`Tileset Type: ${jobSpec.tileset_type}`));
-    console.log(chalk.gray(`View Angle: ${jobSpec.viewAngle}`));
-    console.log(chalk.gray(`Base Model: ${jobSpec.baseModel}`));
+    console.log(chalk.gray(`View Angle: ${jobSpec.view_angle}`));
+    console.log(chalk.gray(`Base Model: ${jobSpec.base_model}`));
     
     // Submit to file queue
     console.log(chalk.gray('Submitting job to queue...'));

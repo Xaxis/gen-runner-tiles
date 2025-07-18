@@ -4,8 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 export interface GenerateOptions {
   theme: string;
   palette: string;
-  size: string;
-  tileset: string;
+  tileSize: string;
+  tilesetType: string;
   baseModel?: string;
 }
 
@@ -15,11 +15,11 @@ export class JobBuilder {
       id: uuidv4(),
       theme: options.theme,
       palette: options.palette,
-      tileSize: parseInt(options.size, 10),
-      tileset_type: options.tileset as 'minimal' | 'extended' | 'full',
-      viewAngle: 'top-down',
-      baseModel: (options.baseModel as 'flux-dev' | 'flux-schnell') || 'flux-dev',
-      createdAt: new Date().toISOString(),
+      tile_size: parseInt(options.tileSize),
+      tileset_type: options.tilesetType as 'minimal' | 'extended' | 'full',
+      view_angle: 'top-down',
+      base_model: (options.baseModel as 'flux-dev' | 'flux-schnell') || 'flux-dev',
+      created_at: new Date().toISOString(),
     };
 
     // Validate the job spec
