@@ -41,7 +41,7 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
         if not all([tileset_setup, reference_maps, control_images, perspective_config, lighting_config]):
             context.add_error(5, "Missing required data from previous stages")
             return {"success": False, "errors": ["Missing required data from previous stages"]}
-        
+
         # Initialize REAL multi-tile diffusion engine
         diffusion_engine = RealMultiTileDiffusionEngine(
             tileset_setup=tileset_setup,
@@ -193,11 +193,11 @@ class RealMultiTileDiffusionEngine:
         # Move to appropriate device
         device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
 
-        # Initialize generator on correct device
+        # FLUX.1-dev ALWAYS requires CPU generator (documented requirement)
         if self.seed is not None:
-            self.generator = torch.Generator(device=device).manual_seed(self.seed)
+            self.generator = torch.Generator(device="cpu").manual_seed(self.seed)
         else:
-            self.generator = torch.Generator(device=device)
+            self.generator = torch.Generator(device="cpu")
 
         logger.info("Using device for generation", device=str(device))
         
@@ -292,8 +292,16 @@ class RealMultiTileDiffusionEngine:
         # Create a simple prompt for the atlas
         first_prompt = list(self._generate_tile_prompts().values())[0]
 
-        # Generate using the pipeline's __call__ method (let it create its own latents)
+        # Generate using the pipeline's __call__ method with proper device handling
         with torch.no_grad():
+            # Clear GPU cache before generation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            # Use pipeline as-is without any device mapping changes
+            # The pipeline is already loaded properly from model registry
+            # Generator was already created in _load_flux_pipeline with correct device
+
             result = self.pipeline(
                 prompt=first_prompt,
                 height=self.atlas_height,
@@ -304,6 +312,10 @@ class RealMultiTileDiffusionEngine:
                 # Don't pass custom latents - let FLUX create correct dimensions
                 output_type="pil"  # Return PIL image directly
             )
+
+            # Clear GPU cache after generation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         logger.info("Coordinated diffusion completed")
         return result.images[0]  # Return the first (and only) generated image

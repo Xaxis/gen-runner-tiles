@@ -267,6 +267,7 @@ class ModelRegistry:
     def get_model_config(self, model_name: str) -> Optional[ModelConfig]:
         """Get model configuration by name (lightweight - no model loading)."""
         return self.model_configs.get(model_name)
+
     
     def get_theme_config(self, theme_name: str) -> Optional[ThemeConfig]:
         """Get theme configuration by name."""
@@ -318,28 +319,13 @@ class ModelRegistry:
             else:
                 logger.warning("No HuggingFace token found in environment")
 
-            if config.enable_cpu_offload and ACCELERATE_AVAILABLE:
-                # Create pipeline with device mapping for automatic CPU offloading
-                try:
-                    pipeline = FluxPipeline.from_pretrained(
-                        config.model_id,
-                        torch_dtype=torch_dtype,
-                        device_map="balanced",  # Balanced device mapping for CPU offloading
-                        low_cpu_mem_usage=True  # Reduce CPU memory usage
-                    )
-                    logger.info("Pipeline created with CPU offloading", model_name=model_name)
-                except Exception as e:
-                    logger.warning("Failed to create pipeline with CPU offloading, using standard",
-                                 model_name=model_name, error=str(e))
-                    pipeline = FluxPipeline.from_pretrained(
-                        config.model_id,
-                        torch_dtype=torch_dtype
-                    )
-            else:
-                pipeline = FluxPipeline.from_pretrained(
-                    config.model_id,
-                    torch_dtype=torch_dtype
-                )
+            # Load pipeline without device mapping (let Stage 5 handle CPU offloading)
+            pipeline = FluxPipeline.from_pretrained(
+                config.model_id,
+                torch_dtype=torch_dtype,
+                low_cpu_mem_usage=True  # Still use low CPU memory during loading
+            )
+            logger.info("Pipeline created without device mapping", model_name=model_name)
             
             self.loaded_models[model_name] = pipeline
             # Apply retro pixel LoRA for overall aesthetic
@@ -356,16 +342,11 @@ class ModelRegistry:
     def _apply_retro_pixel_lora(self, pipeline, model_name: str):
         """Apply retro pixel LoRA for overall aesthetic regardless of theme."""
         try:
-            # Use the BEST FLUX-compatible pixel art LoRA
-            lora_model_id = "XLabs-AI/flux-lora-collection"
-            lora_subfolder = "loras"  # Contains pixel art variants
+            # Use alvdansen/flux-koda as primary (it's working and supports pixel art)
+            lora_model_id = "alvdansen/flux-koda"
 
-            # Load the pixel art LoRA from the collection
-            pipeline.load_lora_weights(
-                lora_model_id,
-                weight_name="pixel_art_style.safetensors",  # Specific pixel art file
-                adapter_name="retro_pixel"
-            )
+            # Load the LoRA directly
+            pipeline.load_lora_weights(lora_model_id, adapter_name="retro_pixel")
             pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.85])  # Strong pixel effect
 
             logger.info("Applied FLUX-compatible retro pixel LoRA",
@@ -374,25 +355,8 @@ class ModelRegistry:
                        weight=0.85)
 
         except Exception as e:
-            # Fallback to alternative FLUX LoRA
-            try:
-                logger.warning("Primary pixel LoRA failed, trying alternative", error=str(e))
-
-                # Alternative: Use alvdansen/flux-koda which supports pixel styles
-                alt_lora_id = "alvdansen/flux-koda"
-                pipeline.load_lora_weights(alt_lora_id, adapter_name="retro_pixel")
-                pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.8])
-
-                logger.info("Applied alternative FLUX pixel LoRA",
-                           model_name=model_name,
-                           lora_model=alt_lora_id,
-                           weight=0.8)
-
-            except Exception as e2:
-                logger.warning("All FLUX pixel LoRAs failed, using enhanced prompting",
-                             primary_error=str(e),
-                             fallback_error=str(e2),
-                             model_name=model_name)
+            logger.warning("Failed to apply FLUX pixel LoRA, continuing with base model",
+                         error=str(e), model_name=model_name, lora_model=lora_model_id)
     
     def load_controlnet_model(self, model_name: str):
         """Lazy load a ControlNet model only when needed."""
