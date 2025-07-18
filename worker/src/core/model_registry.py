@@ -11,6 +11,8 @@ from dataclasses import dataclass, asdict
 import torch
 import structlog
 
+logger = structlog.get_logger()
+
 # Initialize accelerate environment for CPU offloading on MacBook
 try:
     import accelerate
@@ -22,8 +24,6 @@ try:
 except Exception as e:
     ACCELERATE_AVAILABLE = False
     logger.warning("Failed to initialize accelerate", error=str(e))
-
-logger = structlog.get_logger()
 
 @dataclass
 class ModelConfig:
@@ -318,31 +318,66 @@ class ModelRegistry:
             else:
                 logger.warning("No HuggingFace token found in environment")
 
-            pipeline = FluxPipeline.from_pretrained(
-                config.model_id,
-                torch_dtype=torch_dtype
-                # Uses global HuggingFace cache automatically
-            )
-            
             if config.enable_cpu_offload and ACCELERATE_AVAILABLE:
+                # Create pipeline with device mapping for automatic CPU offloading
                 try:
-                    # Use model CPU offloading with global accelerator
-                    pipeline.enable_model_cpu_offload()
-                    logger.info("CPU offloading enabled successfully", model_name=model_name)
+                    pipeline = FluxPipeline.from_pretrained(
+                        config.model_id,
+                        torch_dtype=torch_dtype,
+                        device_map="balanced",  # Balanced device mapping for CPU offloading
+                        low_cpu_mem_usage=True  # Reduce CPU memory usage
+                    )
+                    logger.info("Pipeline created with CPU offloading", model_name=model_name)
                 except Exception as e:
-                    logger.warning("CPU offloading failed, continuing without it",
+                    logger.warning("Failed to create pipeline with CPU offloading, using standard",
                                  model_name=model_name, error=str(e))
-            elif config.enable_cpu_offload and not ACCELERATE_AVAILABLE:
-                logger.warning("CPU offloading requested but accelerate not available", model_name=model_name)
+                    pipeline = FluxPipeline.from_pretrained(
+                        config.model_id,
+                        torch_dtype=torch_dtype
+                    )
+            else:
+                pipeline = FluxPipeline.from_pretrained(
+                    config.model_id,
+                    torch_dtype=torch_dtype
+                )
             
             self.loaded_models[model_name] = pipeline
+            # Apply retro pixel LoRA for overall aesthetic
+            self._apply_retro_pixel_lora(pipeline, model_name)
+
             logger.info("Base model loaded successfully", model_name=model_name)
-            
+
             return pipeline
             
         except Exception as e:
             logger.error("Failed to load base model", model_name=model_name, error=str(e))
             raise
+
+    def _apply_retro_pixel_lora(self, pipeline, model_name: str):
+        """Apply retro pixel LoRA for overall aesthetic regardless of theme."""
+        try:
+            # Path to retro pixel LoRA
+            retro_pixel_lora_path = "models/loras/retro_pixel_tileset_v1.safetensors"
+
+            # Check if LoRA exists
+            import os
+            if not os.path.exists(retro_pixel_lora_path):
+                logger.warning("Retro pixel LoRA not found, using base model only",
+                             path=retro_pixel_lora_path)
+                return
+
+            # Load and apply LoRA
+            pipeline.load_lora_weights(retro_pixel_lora_path, adapter_name="retro_pixel")
+            pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.75])  # 75% strength
+
+            logger.info("Applied retro pixel LoRA",
+                       model_name=model_name,
+                       lora_path=retro_pixel_lora_path,
+                       weight=0.75)
+
+        except Exception as e:
+            logger.warning("Failed to apply retro pixel LoRA, continuing with base model",
+                         error=str(e), model_name=model_name)
     
     def load_controlnet_model(self, model_name: str):
         """Lazy load a ControlNet model only when needed."""

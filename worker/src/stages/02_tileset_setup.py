@@ -131,7 +131,10 @@ class TilesetSetup:
         
         # Generate shared edges and connectivity
         self._generate_shared_edges()
-        
+
+        # Assign proper shared edge patterns based on connectivity
+        self._assign_shared_edge_patterns()
+
         # Validate tessellation completeness
         self._validate_tessellation()
         
@@ -268,25 +271,65 @@ class TilesetSetup:
         return composition
     
     def _generate_edge_patterns(self, tile_id: int, connectivity: Set[str], tile_type: str) -> Dict[str, str]:
-        """Generate edge patterns for Wang tile matching."""
+        """Generate edge patterns for Wang tile matching - placeholder for now."""
         edge_patterns = {}
-        
-        # Assign pattern IDs based on tile type and connectivity
+
+        # For now, assign temporary patterns - will be fixed in _assign_shared_edge_patterns
         for direction in ["top", "bottom", "left", "right"]:
             if direction in connectivity:
-                # Connected edges get specific patterns based on tile type
-                pattern_id = f"{tile_type}_{direction}_{len(connectivity)}"
-                edge_patterns[direction] = pattern_id
-                
-                # Track which tiles use this pattern
-                if pattern_id not in self.edge_patterns:
-                    self.edge_patterns[pattern_id] = []
-                self.edge_patterns[pattern_id].append(tile_id)
+                edge_patterns[direction] = f"temp_{tile_id}_{direction}"
             else:
-                # Non-connected edges get "free" pattern
                 edge_patterns[direction] = "free"
-        
+
         return edge_patterns
+
+    def _assign_shared_edge_patterns(self):
+        """Assign shared edge patterns based on actual connectivity."""
+        # Clear the old pattern tracking
+        self.edge_patterns = {}
+        pattern_counter = 1
+
+        # Process each shared edge to assign matching patterns
+        processed_edges = set()
+
+        for shared_edge in self.shared_edges:
+            edge_key = (min(shared_edge.tile_a_id, shared_edge.tile_b_id),
+                       max(shared_edge.tile_a_id, shared_edge.tile_b_id),
+                       shared_edge.tile_a_edge, shared_edge.tile_b_edge)
+
+            if edge_key in processed_edges:
+                continue
+
+            # Create a shared pattern for this connection
+            pattern_id = f"shared_pattern_{pattern_counter}"
+            pattern_counter += 1
+
+            # Assign the same pattern to both connecting edges
+            tile_a_spec = self.tile_specs[shared_edge.tile_a_id]
+            tile_b_spec = self.tile_specs[shared_edge.tile_b_id]
+
+            tile_a_spec.edge_patterns[shared_edge.tile_a_edge] = pattern_id
+            tile_b_spec.edge_patterns[shared_edge.tile_b_edge] = pattern_id
+
+            # Track pattern usage
+            if pattern_id not in self.edge_patterns:
+                self.edge_patterns[pattern_id] = []
+            self.edge_patterns[pattern_id].extend([shared_edge.tile_a_id, shared_edge.tile_b_id])
+
+            processed_edges.add(edge_key)
+
+        # Handle any remaining connected edges that don't have shared edges yet
+        for tile_id, tile_spec in self.tile_specs.items():
+            for direction, pattern in tile_spec.edge_patterns.items():
+                if pattern.startswith("temp_") and direction in tile_spec.connectivity_pattern:
+                    # This edge connects but doesn't have a shared pattern yet
+                    # Assign a unique pattern for now
+                    unique_pattern = f"unique_pattern_{tile_id}_{direction}"
+                    tile_spec.edge_patterns[direction] = unique_pattern
+
+                    if unique_pattern not in self.edge_patterns:
+                        self.edge_patterns[unique_pattern] = []
+                    self.edge_patterns[unique_pattern].append(tile_id)
 
     def _generate_shared_edges(self):
         """Generate shared edges between tiles that must match exactly."""
@@ -308,23 +351,23 @@ class TilesetSetup:
         # Cross connects to everything
 
         connectivity_rules = {
-            # Corners (tile_ids 0-3) - only connect in their connectivity directions
+            # Corners (tile_ids 0-3) connect to edges and t-junctions
             0: {"right": 7, "top": 4},      # corner_ne -> edge_east, edge_north
             1: {"left": 6, "top": 4},       # corner_nw -> edge_west, edge_north
             2: {"right": 7, "bottom": 5},   # corner_se -> edge_east, edge_south
             3: {"left": 6, "bottom": 5},    # corner_sw -> edge_west, edge_south
 
-            # Edges (tile_ids 4-7) - DON'T connect in their edge direction!
-            4: {},  # edge_north (top) - no neighbors, it's a dead end
-            5: {},  # edge_south (bottom) - no neighbors, it's a dead end
-            6: {},  # edge_west (left) - no neighbors, it's a dead end
-            7: {},  # edge_east (right) - no neighbors, it's a dead end
+            # Edges (tile_ids 4-7) connect to corners and t-junctions
+            4: {"left": 1, "right": 0, "top": 9},       # edge_north -> corners + t_south
+            5: {"left": 3, "right": 2, "bottom": 8},    # edge_south -> corners + t_north
+            6: {"top": 1, "bottom": 3, "left": 11},     # edge_west -> corners + t_east
+            7: {"top": 0, "bottom": 2, "right": 10},    # edge_east -> corners + t_west
 
-            # T-junctions (tile_ids 8-11) connect to cross and edges
-            8: {"left": 6, "right": 7, "bottom": 5},    # t_north -> edges
-            9: {"left": 6, "right": 7, "top": 4},       # t_south -> edges
-            10: {"top": 4, "bottom": 5, "right": 7},    # t_east -> edges
-            11: {"top": 4, "bottom": 5, "left": 6},     # t_west -> edges
+            # T-junctions (tile_ids 8-11) connect to edges and cross
+            8: {"left": 6, "right": 7, "bottom": 5, "top": 12},    # t_north -> edges + cross
+            9: {"left": 6, "right": 7, "top": 4, "bottom": 12},    # t_south -> edges + cross
+            10: {"top": 4, "bottom": 5, "right": 7, "left": 12},   # t_east -> edges + cross
+            11: {"top": 4, "bottom": 5, "left": 6, "right": 12},   # t_west -> edges + cross
 
             # Cross (tile_id 12) connects to all T-junctions
             12: {"top": 9, "bottom": 8, "left": 11, "right": 10}  # cross -> t-junctions
@@ -438,7 +481,7 @@ class TilesetSetup:
 
         # Check edge pattern consistency
         for pattern_id, tile_list in self.edge_patterns.items():
-            if len(tile_list) < 2 and pattern_id != "free":
+            if len(tile_list) < 2 and not pattern_id.startswith("unique_pattern_"):
                 errors.append(f"Edge pattern {pattern_id} used by only one tile")
 
         if errors:
@@ -458,17 +501,22 @@ class TilesetSetup:
         """Get tile specification by ID."""
         return self.tile_specs.get(tile_id)
 
+
+
     def _setup_extended_tessellation(self):
         """Set up extended tessellation with more tile variations."""
         # Start with minimal set
         self._setup_minimal_tessellation()
 
         # Add variations and transitions (placeholder for now)
+        # @TODO - Implement this
         logger.info("Extended tessellation not fully implemented yet")
 
     def _setup_full_wang_tiles(self):
         """Set up complete Wang tile set."""
+
         # Full 256-tile Wang set (placeholder for now)
+        # @TODO - Implement this
         logger.info("Full Wang tiles not implemented yet")
 
 
@@ -495,6 +543,21 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
 
         # Store in context
         context.universal_tileset = tileset_setup
+
+        # Store derived data for Stage 5 coordination
+        context.adjacency_graph = {
+            tile_id: list(tile_spec.neighbors.values())
+            for tile_id, tile_spec in tileset_setup.tile_specs.items()
+        }
+        context.shared_edges = tileset_setup.shared_edges
+        context.atlas_layout = {
+            "columns": tileset_setup.atlas_columns,
+            "rows": tileset_setup.atlas_rows,
+            "tile_count": tileset_setup.tile_count,
+            "tile_size": tileset_setup.tile_size,
+            "atlas_width": tileset_setup.atlas_columns * tileset_setup.tile_size,
+            "atlas_height": tileset_setup.atlas_rows * tileset_setup.tile_size
+        }
 
         # Update context stage
         context.current_stage = 2

@@ -26,10 +26,15 @@ class PipelineContext:
     # Stage 02: Universal tileset structure
     universal_tileset: Optional[Any] = None  # UniversalTileset object
     tileset_summary: Optional[Dict[str, Any]] = None
+    adjacency_graph: Dict[int, List[int]] = field(default_factory=dict)
+    shared_edges: List[Any] = field(default_factory=list)  # SharedEdge objects
+    atlas_layout: Dict[str, Any] = field(default_factory=dict)
     
     # Stage 03: Perspective and lighting setup
     perspective_params: Optional[Dict[str, Any]] = None
+    perspective_config: Optional[Dict[str, Any]] = None
     lighting_config: Optional[Dict[str, Any]] = None
+    tessellation_perspective: Optional[Dict[str, Any]] = None
     
     # Stage 04: Reference synthesis results
     reference_maps: Dict[int, Dict[str, Image.Image]] = field(default_factory=dict)

@@ -258,7 +258,7 @@ class JobProcessor:
         logger.info("Configuration extracted", 
                    theme=config["theme"], 
                    tile_count=config["tile_count"],
-                   base_model=config["models"]["base_model"])
+                   base_model=config["base_model"])
         
         return config
     
