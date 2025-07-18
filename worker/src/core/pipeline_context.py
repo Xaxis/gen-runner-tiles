@@ -45,8 +45,14 @@ class PipelineContext:
     generation_metadata: Dict[int, Dict[str, Any]] = field(default_factory=dict)
     
     # Stage 06: Constraint enforcement results
-    constraint_violations: Dict[int, List[str]] = field(default_factory=dict)
-    constraint_scores: Dict[int, Dict[str, float]] = field(default_factory=dict)
+    validated_tiles: Dict[int, Image.Image] = field(default_factory=dict)
+    constraint_violations: List[str] = field(default_factory=list)
+    quality_metrics: Dict[str, float] = field(default_factory=dict)
+
+    # Stage 07: Final output results
+    output_files: List[str] = field(default_factory=list)
+    atlas_image_path: Optional[str] = None
+    individual_tiles_dir: Optional[str] = None
     
     # Stage 07: Failure recovery results
     final_tiles: Dict[int, Image.Image] = field(default_factory=dict)
