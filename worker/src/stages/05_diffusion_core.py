@@ -114,7 +114,7 @@ class BrilliantFluxEngine:
         self.atlas_height = self.atlas_rows * self.tile_size
         
         # FLUX generation parameters (research-optimized)
-        self.steps = 20  # Optimal for UmeAiRT LoRA
+        self.steps = 35
         self.guidance_scale = 3.5  # FLUX optimal
         self.lora_weight = 0.7  # UmeAiRT optimal
         
