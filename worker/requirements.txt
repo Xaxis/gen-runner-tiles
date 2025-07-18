@@ -5,6 +5,7 @@ diffusers>=0.21.0
 transformers>=4.30.0
 accelerate>=0.20.0
 sentencepiece>=0.1.99  # Required for FLUX tokenizer
+protobuf>=3.20.0  # Required for FLUX model loading
 
 # Image processing
 Pillow>=10.0.0
