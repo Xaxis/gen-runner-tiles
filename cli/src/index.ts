@@ -18,7 +18,7 @@ program
   .description('Generate a new tileset')
   .option('-t, --theme <theme>', 'Theme for the tileset (e.g., fantasy, sci-fi)')
   .option('-p, --palette <palette>', 'Color palette name')
-  .option('-s, --tile-size <tile-size>', 'Tile size in pixels', '32')
+  .option('-s, --tile-size <tile-size>', 'Tile size in pixels', '64')
   .option('--tileset-type <tileset-type>', 'Tileset type (minimal, extended, full)', 'minimal')
   .option('--base-model <base-model>', 'Base model to use (flux-dev, flux-schnell)', 'flux-dev')
   .action(generateCommand);

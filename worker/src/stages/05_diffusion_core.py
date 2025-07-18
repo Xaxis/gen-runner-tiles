@@ -139,8 +139,8 @@ class BrilliantFluxEngine:
         # Create multi-modal conditioning from Stage 4 data
         conditioning_data = self._create_multimodal_conditioning()
         
-        # Generate optimized prompt (FLUX supports 512 tokens via T5)
-        atlas_prompt = self._generate_optimized_prompt(conditioning_data)
+        # Generate dual prompts (CLIP 77 tokens + T5 512 tokens)
+        clip_prompt, t5_prompt = self._generate_optimized_prompt(conditioning_data)
         negative_prompt = self._generate_negative_prompt()
         
         # Setup REAL-TIME attention coordination
@@ -148,7 +148,7 @@ class BrilliantFluxEngine:
         
         # Generate with real-time edge coordination
         atlas_image = self._generate_with_attention_coordination(
-            atlas_prompt, negative_prompt, conditioning_data
+            clip_prompt, negative_prompt, conditioning_data
         )
         
         # Extract individual tiles
@@ -218,42 +218,53 @@ class BrilliantFluxEngine:
         
         return conditioning_data
     
-    def _generate_optimized_prompt(self, conditioning_data: Dict[str, Image.Image]) -> str:
-        """Generate optimized prompt respecting CLIP's 77 token limit."""
+    def _generate_optimized_prompt(self, conditioning_data: Dict[str, Image.Image]) -> Tuple[str, str]:
+        """Generate TWO prompts: short for CLIP (77 tokens) and detailed for T5 (512 tokens)."""
 
-        # CRITICAL: FLUX uses DUAL encoders - CLIP (77 tokens) + T5 (512 tokens)
-        # CLIP is more important for visual alignment, so optimize for 77 tokens
+        # SHORT CLIP PROMPT (under 77 tokens)
+        clip_prompt = f"umempart, pixel art tileset, {self.theme} {self.palette}, seamless tiles, crisp pixels, retro game asset"
 
-        # Core prompt (under 30 tokens)
-        core_prompt = f"umempart, pixel art tileset, {self.theme} {self.palette}"
+        # DETAILED T5 PROMPT (use full 512 token capacity)
+        base_prompt = f"umempart, pixel art tileset, {self.theme} {self.palette} style"
 
-        # Essential tessellation terms (under 15 tokens)
-        tessellation_terms = "seamless tiles, perfect edges"
+        # Detailed tessellation requirements
+        tessellation_terms = "seamless tessellating tiles, perfect edge matching, repeating pattern, tileable texture, no gaps, no seams, continuous borders"
 
-        # Conditional quality terms based on available conditioning (under 20 tokens)
-        quality_terms = []
+        # Multi-modal conditioning information (ALL Stage 4 data)
+        conditioning_terms = []
         if "edge" in conditioning_data:
-            quality_terms.append("sharp edges")
+            conditioning_terms.append("sharp defined edges, clear tile boundaries, precise edge alignment")
         if "structure" in conditioning_data:
-            quality_terms.append("geometric")
+            conditioning_terms.append("geometric structure consistency, architectural precision, structural coherence")
+        if "depth" in conditioning_data:
+            conditioning_terms.append("proper depth layering, dimensional consistency, 3D structure awareness")
+        if "normal" in conditioning_data:
+            conditioning_terms.append("detailed surface textures, consistent lighting, normal map guided surfaces")
+        if "lighting" in conditioning_data:
+            conditioning_terms.append("unified lighting scheme, consistent illumination, coherent shadows")
 
-        # Essential style terms (under 12 tokens remaining)
-        style_terms = "crisp pixels, retro game asset"
+        # Quality and style terms
+        quality_terms = "crisp pixels, no blur, sharp edges, detailed pixel work, high quality pixel art"
+        style_terms = "16-bit retro style, classic video game aesthetic, detailed sprite work, unified tileset design"
+        game_terms = "retro game assets, video game tiles, sprite collection, game development ready"
 
-        # Combine efficiently (total under 77 tokens)
-        if quality_terms:
-            full_prompt = f"{core_prompt}, {tessellation_terms}, {', '.join(quality_terms)}, {style_terms}"
-        else:
-            full_prompt = f"{core_prompt}, {tessellation_terms}, {style_terms}"
+        # Combine for T5 (512 tokens)
+        t5_prompt = f"{base_prompt}, {tessellation_terms}"
+        if conditioning_terms:
+            t5_prompt += f", {', '.join(conditioning_terms)}"
+        t5_prompt += f", {quality_terms}, {style_terms}, {game_terms}"
 
-        # Verify token count
-        token_count = len(full_prompt.split())
-        logger.info("Optimized prompt generated",
-                   prompt_length=token_count,
-                   under_clip_limit=token_count < 77,
+        # Verify token counts
+        clip_tokens = len(clip_prompt.split())
+        t5_tokens = len(t5_prompt.split())
+
+        logger.info("Dual prompts generated",
+                   clip_tokens=clip_tokens,
+                   t5_tokens=t5_tokens,
+                   clip_under_limit=clip_tokens < 77,
                    conditioning_types=len(conditioning_data))
 
-        return full_prompt
+        return clip_prompt, t5_prompt
     
     def _generate_negative_prompt(self) -> str:
         """Generate comprehensive negative prompt."""
@@ -272,15 +283,21 @@ class BrilliantFluxEngine:
         def attention_coordination_hook(module, input, output):
             """Hook to coordinate attention between tile edges during generation."""
             try:
-                # Handle different output types from FLUX attention layers
-                if isinstance(output, tuple):
-                    # FLUX attention returns (attention_output, attention_weights)
+                # FLUX attention layers return different formats
+                if isinstance(output, tuple) and len(output) > 0:
+                    # Extract the main attention output (first element)
                     attention_output = output[0]
-                    coordinated_output = self._apply_attention_coordination(attention_output)
-                    return (coordinated_output, output[1]) if len(output) > 1 else (coordinated_output,)
-                else:
+                    if isinstance(attention_output, torch.Tensor):
+                        coordinated_output = self._apply_attention_coordination(attention_output)
+                        # Return tuple with coordinated output
+                        return (coordinated_output,) + output[1:] if len(output) > 1 else (coordinated_output,)
+                elif isinstance(output, torch.Tensor):
                     # Single tensor output
                     return self._apply_attention_coordination(output)
+
+                # If we can't handle the format, return unchanged
+                return output
+
             except Exception as e:
                 logger.warning("Attention hook failed", error=str(e))
                 return output
@@ -423,7 +440,7 @@ class BrilliantFluxEngine:
 
         return spatial_attention
 
-    def _generate_with_attention_coordination(self, atlas_prompt: str, negative_prompt: str,
+    def _generate_with_attention_coordination(self, clip_prompt: str, negative_prompt: str,
                                             conditioning_data: Dict[str, Image.Image]) -> Image.Image:
         """Generate atlas with real-time attention coordination."""
         logger.info("Starting generation with real-time attention coordination", steps=self.steps)
@@ -438,18 +455,40 @@ class BrilliantFluxEngine:
         else:
             generator = torch.Generator(device="cpu")
 
-        # Generate with real-time coordination (attention hooks active)
+        # Generate with REAL ControlNet conditioning from Stage 4
         with torch.no_grad():
-            result = self.pipeline(
-                prompt=atlas_prompt,
-                negative_prompt=negative_prompt,
-                height=self.atlas_height,
-                width=self.atlas_width,
-                num_inference_steps=self.steps,
-                guidance_scale=self.guidance_scale,
-                generator=generator,
-                output_type="pil"
-            )
+            # Check if pipeline supports ControlNet
+            if hasattr(self.pipeline, 'controlnet') and self.pipeline.controlnet is not None:
+                # Use FLUX ControlNet with Stage 4 edge conditioning
+                control_image = conditioning_data.get("edge", conditioning_data.get("structure"))
+
+                result = self.pipeline(
+                    prompt=clip_prompt,  # Use SHORT prompt for CLIP (77 tokens)
+                    negative_prompt=negative_prompt,
+                    control_image=control_image,  # REAL Stage 4 conditioning!
+                    controlnet_conditioning_scale=0.8,  # Strong structure control
+                    height=self.atlas_height,
+                    width=self.atlas_width,
+                    num_inference_steps=self.steps,
+                    guidance_scale=self.guidance_scale,
+                    generator=generator,
+                    output_type="pil"
+                )
+                logger.info("Generated atlas using FLUX ControlNet with Stage 4 conditioning")
+
+            else:
+                # Fallback to text-only generation
+                result = self.pipeline(
+                    prompt=clip_prompt,  # Use SHORT prompt for CLIP (77 tokens)
+                    negative_prompt=negative_prompt,
+                    height=self.atlas_height,
+                    width=self.atlas_width,
+                    num_inference_steps=self.steps,
+                    guidance_scale=self.guidance_scale,
+                    generator=generator,
+                    output_type="pil"
+                )
+                logger.info("Generated atlas using text-only (ControlNet not available)")
 
         # Clear GPU cache
         if torch.cuda.is_available():

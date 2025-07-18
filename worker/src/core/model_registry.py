@@ -305,7 +305,7 @@ class ModelRegistry:
                     "Install it with: pip install sentencepiece"
                 )
 
-            from diffusers import FluxPipeline
+            from diffusers import FluxPipeline, FluxControlNetPipeline, FluxControlNetModel
 
             # Determine torch dtype
             torch_dtype = getattr(torch, config.precision)
@@ -322,12 +322,31 @@ class ModelRegistry:
             else:
                 logger.warning("No HuggingFace token found in environment")
 
-            # Load pipeline for RTX 3080 with sequential CPU offloading
-            pipeline = FluxPipeline.from_pretrained(
-                config.model_id,
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True
-            )
+            # Load FLUX ControlNet pipeline for multi-modal conditioning
+            try:
+                # Load ControlNet model for edge/structure control
+                controlnet = FluxControlNetModel.from_pretrained(
+                    "InstantX/FLUX.1-dev-Controlnet-Canny",  # REAL working ControlNet
+                    torch_dtype=torch.bfloat16
+                )
+
+                # Load FLUX pipeline WITH ControlNet
+                pipeline = FluxControlNetPipeline.from_pretrained(
+                    config.model_id,
+                    controlnet=controlnet,
+                    torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=True
+                )
+                logger.info("FLUX ControlNet pipeline loaded successfully")
+
+            except Exception as e:
+                logger.warning("Failed to load FLUX ControlNet, falling back to base FLUX", error=str(e))
+                # Fallback to base FLUX pipeline
+                pipeline = FluxPipeline.from_pretrained(
+                    config.model_id,
+                    torch_dtype=torch.bfloat16,
+                    low_cpu_mem_usage=True
+                )
 
             # Use sequential CPU offloading (moves components as needed)
             try:
