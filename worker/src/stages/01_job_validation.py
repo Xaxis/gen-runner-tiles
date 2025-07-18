@@ -117,9 +117,7 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
                 "palette": extracted_config["palette"],
                 "tileset_type": extracted_config["tileset_type"],
                 "tile_size": extracted_config["tile_size"],
-                "sub_tile_size": extracted_config["sub_tile_size"],
-                "base_model": extracted_config["models"]["base_model"],
-                "use_controlnet": extracted_config["models"]["use_controlnet"],
+                "base_model": extracted_config["base_model"],
             }
         }
         
@@ -159,18 +157,13 @@ def _validate_extracted_config(config: Dict[str, Any]) -> Dict[str, List[str]]:
     errors = []
     warnings = []
     
-    # Validate tile sizes
-    tile_size = config.get("tile_size", 0)
-    sub_tile_size = config.get("sub_tile_size", 0)
-    
-    if tile_size < 16 or tile_size > 512:
-        errors.append(f"Tile size {tile_size} must be between 16 and 512 pixels")
-    
-    if sub_tile_size < 4 or sub_tile_size > 64:
-        errors.append(f"Sub-tile size {sub_tile_size} must be between 4 and 64 pixels")
-    
-    if tile_size % sub_tile_size != 0:
-        errors.append(f"Tile size {tile_size} must be divisible by sub-tile size {sub_tile_size}")
+    # Validate tile size (sub_tile_size is now calculated by Stage 2)
+    tile_size = config.get("tileSize", 0)  # Match JobSpec field name
+
+    # Validate tile size is supported
+    valid_tile_sizes = [32, 64, 128, 256, 512]
+    if tile_size not in valid_tile_sizes:
+        errors.append(f"Unsupported tile size: {tile_size}. Must be one of {valid_tile_sizes}")
     
     # Validate tileset type
     tileset_type = config.get("tileset_type", "")
@@ -348,46 +341,16 @@ def _create_validated_job_spec(job_spec: Dict[str, Any], config: Dict[str, Any])
 def _extract_configuration_from_job_spec(job_spec: Dict[str, Any]) -> Dict[str, Any]:
     """Extract and normalize configuration from job specification."""
 
-    # Extract basic configuration
+    # Extract basic configuration (simplified for refactored pipeline)
     extracted_config = {
         "theme": job_spec.get("theme", "fantasy"),
         "palette": job_spec.get("palette", "default"),
-        "tile_size": job_spec.get("tileSize", 64),
-        "sub_tile_size": job_spec.get("subTileSize", 32),
+        "tileSize": job_spec.get("tileSize", 64),  # Match JobSpec field name
         "tileset_type": job_spec.get("tileset_type", "minimal"),
+        "viewAngle": job_spec.get("viewAngle", "top-down"),
+        "baseModel": job_spec.get("baseModel", "flux-dev"),
+        # sub_tile_size is now calculated by Stage 2
 
-        # Model configuration
-        "models": {
-            "base_model": job_spec.get("models", {}).get("baseModel", "flux-dev"),
-            "controlnet_model": job_spec.get("models", {}).get("controlnetModel", "flux-controlnet-union"),
-            "use_controlnet": job_spec.get("models", {}).get("useControlNet", True),
-            "precision": job_spec.get("models", {}).get("precision", "fp16")
-        },
-
-        # Generation parameters
-        "generation": {
-            "steps": job_spec.get("generation", {}).get("steps", 20),
-            "guidance_scale": job_spec.get("generation", {}).get("guidanceScale", 3.5),
-            "seed": job_spec.get("generation", {}).get("seed", None),
-            "batch_size": job_spec.get("generation", {}).get("batchSize", 1)
-        },
-
-        # Constraints
-        "constraints": {
-            "edge_similarity": job_spec.get("constraints", {}).get("edgeSimilarity", 0.95),
-            "palette_deviation": job_spec.get("constraints", {}).get("paletteDeviation", 5.0),
-            "structural_compliance": job_spec.get("constraints", {}).get("structuralCompliance", 0.8),
-            "sub_tile_coherence": job_spec.get("constraints", {}).get("subTileCoherence", 0.7)
-        },
-
-        # Atlas configuration
-        "atlas": {
-            "columns": job_spec.get("atlasLayout", {}).get("columns", 4),
-            "rows": job_spec.get("atlasLayout", {}).get("rows", 4),
-            "padding": job_spec.get("atlasLayout", {}).get("padding", 1),
-            "power_of_two": job_spec.get("atlasLayout", {}).get("powerOfTwo", True),
-            "max_size": job_spec.get("atlasLayout", {}).get("maxSize", 2048)
-        }
     }
 
     return extracted_config

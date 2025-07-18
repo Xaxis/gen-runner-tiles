@@ -1,468 +1,546 @@
 """
-Stage 04: Reference Synthesis
-Generates ControlNet conditioning images with shared edge coordination.
-Creates reference maps that ensure adjacent tiles have matching edge content.
+Stage 4: Reference Synthesis
+Generates reference images using REAL tessellation data from Stage 2.
+Creates structure-aware, pattern-consistent references for proper Wang tile generation.
 """
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFilter
+import json
+from pathlib import Path
 from typing import Dict, Any, List, Tuple
-import cv2
+from PIL import Image, ImageDraw, ImageFont
 import structlog
 
 from ..core.pipeline_context import PipelineContext
 
 logger = structlog.get_logger()
 
+
 def execute(context: PipelineContext) -> Dict[str, Any]:
-    """
-    Execute Stage 04: Reference Synthesis
-    
-    Generates ControlNet conditioning images with shared edge coordination:
-    - Creates reference maps for each tile using camera/lighting from Stage 03
-    - Ensures shared edges have matching reference content
-    - Prepares conditioning images for ControlNet guidance
-    
-    Args:
-        context: Pipeline context with tileset setup and perspective config
-        
-    Returns:
-        Dict with reference maps and control images
-    """
-    logger.info("Starting reference synthesis", job_id=context.get_job_id())
-    
+    """Execute reference synthesis stage using real tessellation data."""
     try:
+        logger.info("Starting reference synthesis", job_id=context.get_job_id())
+        
         # Validate context state
         if not context.validate_context_state(4):
             return {"success": False, "errors": context.pipeline_errors}
         
         # Get required data from context
-        tileset_setup = context.universal_tileset
-        camera_params = context.global_camera_params
-        lighting_config = context.lighting_config
-        extracted_config = getattr(context, 'extracted_config', None)
+        if not context.universal_tileset:
+            context.add_error(4, "Missing universal tileset from Stage 2")
+            return {"success": False, "errors": ["Missing universal tileset from Stage 2"]}
         
-        if not tileset_setup:
-            context.add_error(4, "Tileset setup not found")
-            return {"success": False, "errors": ["Tileset setup not found"]}
+        extracted_config = getattr(context, 'extracted_config', {})
+        if not extracted_config:
+            context.add_error(4, "Missing extracted configuration")
+            return {"success": False, "errors": ["Missing extracted configuration"]}
         
-        if not camera_params or not lighting_config:
-            context.add_error(4, "Perspective configuration not found")
-            return {"success": False, "errors": ["Perspective configuration not found"]}
-        
-        # Initialize reference synthesizer
-        synthesizer = ReferenceSynthesizer(
-            tileset_setup=tileset_setup,
-            camera_params=camera_params,
-            lighting_config=lighting_config,
-            config=extracted_config
+        # Create reference synthesizer with REAL tessellation data
+        synthesizer = TessellationReferenceSynthesizer(
+            tileset_setup=context.universal_tileset,
+            config=extracted_config,
+            output_path=context.output_path
         )
         
-        # Generate reference maps with shared edge coordination
-        synthesis_result = synthesizer.generate_coordinated_references()
+        # Generate structure-aware, pattern-consistent references
+        synthesis_result = synthesizer.generate_tessellation_references()
         
-        # Store in context
+        # Save reference images with proper tessellation naming
+        synthesizer.save_tessellation_references(context, synthesis_result)
+        
+        # Store results in context for Stage 5
         context.reference_maps = synthesis_result["reference_maps"]
         context.control_images = synthesis_result["control_images"]
+        
+        # Update context stage
+        context.current_stage = 4
         
         logger.info("Reference synthesis completed", 
                    job_id=context.get_job_id(),
                    tiles_processed=len(synthesis_result["reference_maps"]),
-                   shared_edges_coordinated=len(synthesis_result["shared_edge_matches"]))
+                   edge_patterns=len(synthesis_result["edge_pattern_summary"]),
+                   seamless_edges=synthesis_result["tessellation_summary"]["total_seamless_edges"])
         
         return {
             "success": True,
-            "reference_maps": synthesis_result["reference_maps"],
-            "control_images": synthesis_result["control_images"],
-            "shared_edge_matches": synthesis_result["shared_edge_matches"],
-            "synthesis_summary": {
-                "tiles_processed": len(synthesis_result["reference_maps"]),
-                "shared_edges_coordinated": len(synthesis_result["shared_edge_matches"]),
-                "controlnet_model": extracted_config["models"]["controlnet_model"]
+            "data": {
+                "reference_maps": synthesis_result["reference_maps"],
+                "control_images": synthesis_result["control_images"],
+                "edge_pattern_summary": synthesis_result["edge_pattern_summary"],
+                "tessellation_summary": synthesis_result["tessellation_summary"]
             }
         }
         
     except Exception as e:
         error_msg = f"Reference synthesis failed: {str(e)}"
-        logger.error("Reference synthesis failed", job_id=context.get_job_id(), error=error_msg)
+        logger.error("Reference synthesis failed", error=error_msg, job_id=context.get_job_id())
         context.add_error(4, error_msg)
         return {"success": False, "errors": [error_msg]}
 
-class ReferenceSynthesizer:
-    """Synthesizes reference maps with shared edge coordination."""
+
+class TessellationReferenceSynthesizer:
+    """Synthesizes references using real tessellation data from Stage 2."""
     
-    def __init__(self, tileset_setup: Any, camera_params: Dict[str, Any], 
-                 lighting_config: Dict[str, Any], config: Dict[str, Any]):
+    def __init__(self, tileset_setup, config: Dict[str, Any], output_path: Path):
         self.tileset_setup = tileset_setup
-        self.camera_params = camera_params
-        self.lighting_config = lighting_config
         self.config = config
+        self.output_path = output_path
         
+        # Get actual configuration values
         self.tile_size = tileset_setup.tile_size
-        self.controlnet_model = config["models"]["controlnet_model"]
+        self.sub_tile_size = tileset_setup.sub_tile_size
+        self.sub_tiles_per_row = tileset_setup.sub_tiles_per_row
+        self.sub_tiles_per_col = tileset_setup.sub_tiles_per_col
         
-        # Get adjacency and shared edge data
-        self.adjacency_graph = tileset_setup.get_adjacency_graph()
-        self.shared_edges = tileset_setup.get_shared_edges()
-    
-    def generate_coordinated_references(self) -> Dict[str, Any]:
-        """Generate reference maps with shared edge coordination."""
+        # Get theme from config (not tessellation parameters)
+        self.theme = config.get("theme", "fantasy")
+        self.palette = config.get("palette", "medieval")
+
+        # Pattern consistency tracking
+        self.pattern_colors = {}  # pattern_id -> RGB color for consistency
+        self.structure_colors = {  # structure type -> RGB color
+            "CORNER": (255, 100, 100),     # Red
+            "EDGE": (100, 255, 100),       # Green  
+            "T_JUNCTION": (100, 100, 255), # Blue
+            "CENTER": (255, 255, 100),     # Yellow
+            "GENERIC": (128, 128, 128)     # Gray
+        }
+
+        logger.info("Reference synthesizer initialized",
+                   tile_size=self.tile_size,
+                   sub_tile_size=self.sub_tile_size,
+                   sub_tile_grid=f"{self.sub_tiles_per_row}x{self.sub_tiles_per_col}",
+                   theme=self.theme,
+                   palette=self.palette)
+        
+    def generate_tessellation_references(self) -> Dict[str, Any]:
+        """Generate references using real tessellation data."""
         reference_maps = {}
         control_images = {}
-        shared_edge_matches = []
+        edge_pattern_summary = {}
+        tessellation_stats = {
+            "total_seamless_edges": 0,
+            "pattern_usage": {},
+            "structure_distribution": {}
+        }
         
-        # Step 1: Generate individual reference maps for each tile
-        for tile_id in range(self.tileset_setup.tile_count):
-            tile_spec = self.tileset_setup.get_tile_spec(tile_id)
-            
-            if not tile_spec:
-                logger.warning("No tile spec found", tile_id=tile_id)
-                continue
-            
-            # Generate reference maps for this tile
-            tile_references = self._generate_tile_references(tile_spec)
+        # Process each tile using REAL tessellation data
+        for tile_id, tile_spec in self.tileset_setup.tile_specs.items():
+            # Generate structure-aware references
+            tile_references = self._generate_structure_aware_references(tile_spec)
             reference_maps[tile_id] = tile_references
-        
-        # Step 2: Coordinate shared edges to ensure matching content
-        shared_edge_matches = self._coordinate_shared_edges(reference_maps)
-        
-        # Step 3: Generate control images for ControlNet
-        for tile_id in reference_maps:
-            control_image = self._generate_control_image(reference_maps[tile_id])
+            
+            # Generate pattern-consistent control image
+            control_image = self._generate_pattern_control_image(tile_spec)
             control_images[tile_id] = control_image
+            
+            # Track edge patterns for consistency
+            self._track_edge_patterns(tile_spec, edge_pattern_summary)
+            
+            # Update tessellation statistics
+            self._update_tessellation_stats(tile_spec, tessellation_stats)
         
         return {
             "reference_maps": reference_maps,
             "control_images": control_images,
-            "shared_edge_matches": shared_edge_matches
+            "edge_pattern_summary": edge_pattern_summary,
+            "tessellation_summary": tessellation_stats
         }
     
-    def _generate_tile_references(self, tile_spec: Any) -> Dict[str, Image.Image]:
-        """Generate all reference map types for a single tile."""
-        references = {}
-        
-        # Generate structural reference (edges, corners, borders)
-        references["structural"] = self._generate_structural_reference(tile_spec)
-        
-        # Generate depth reference based on camera perspective
-        references["depth"] = self._generate_depth_reference(tile_spec)
-        
-        # Generate normal map reference
-        references["normal"] = self._generate_normal_reference(tile_spec)
-        
-        # Generate edge constraint reference
-        references["edge_constraints"] = self._generate_edge_constraints_reference(tile_spec)
-        
-        # Generate lighting reference
-        references["lighting"] = self._generate_lighting_reference(tile_spec)
-        
-        return references
+    def _generate_structure_aware_references(self, tile_spec) -> Dict[str, Image.Image]:
+        """Generate references that understand sub-tile structure."""
+        return {
+            "structural": self._generate_structural_reference(tile_spec),
+            "depth": self._generate_structure_depth_reference(tile_spec),
+            "normal": self._generate_structure_normal_reference(tile_spec),
+            "edge_constraints": self._generate_seamless_edge_constraints(tile_spec),
+            "lighting": self._generate_structure_lighting_reference(tile_spec)
+        }
     
-    def _generate_structural_reference(self, tile_spec: Any) -> Image.Image:
-        """Generate structural reference showing tile composition."""
+    def _generate_structural_reference(self, tile_spec) -> Image.Image:
+        """Generate structural reference showing sub-tile composition."""
         img = Image.new("RGB", (self.tile_size, self.tile_size), "black")
         draw = ImageDraw.Draw(img)
         
-        composition = tile_spec.structure_composition
-        half_size = self.tile_size // 2
+        # Draw sub-tile grid with structure-specific colors
+        for row in range(self.sub_tiles_per_row):
+            for col in range(self.sub_tiles_per_col):
+                quadrant_key = f"sub_{row}_{col}"
+                structure_type = tile_spec.structure_composition.get(quadrant_key, "GENERIC")
+                
+                # Calculate sub-tile bounds
+                x1 = col * self.sub_tile_size
+                y1 = row * self.sub_tile_size
+                x2 = x1 + self.sub_tile_size
+                y2 = y1 + self.sub_tile_size
+                
+                # Fill with structure-specific color
+                color = self.structure_colors[structure_type]
+                draw.rectangle([x1, y1, x2-1, y2-1], fill=color, outline="white", width=1)
+                
+                # Add structure type label
+                try:
+                    # Try to add text label (may fail if no font available)
+                    text = structure_type[:3]  # First 3 chars
+                    text_x = x1 + self.sub_tile_size // 4
+                    text_y = y1 + self.sub_tile_size // 4
+                    draw.text((text_x, text_y), text, fill="black")
+                except:
+                    pass  # Skip text if font not available
         
-        # Define colors for different structure types
-        structure_colors = {
-            "center": (128, 128, 128),           # Gray
-            "border_top": (255, 255, 255),      # White
-            "border_right": (255, 255, 255),
-            "border_bottom": (255, 255, 255),
-            "border_left": (255, 255, 255),
-            "edge_ne": (200, 200, 255),         # Light blue
-            "edge_nw": (200, 200, 255),
-            "edge_se": (200, 200, 255),
-            "edge_sw": (200, 200, 255),
-            "corner_ne": (255, 200, 200),       # Light red
-            "corner_nw": (255, 200, 200),
-            "corner_se": (255, 200, 200),
-            "corner_sw": (255, 200, 200),
-        }
-        
-        # Draw each quadrant
-        quadrants = [
-            ("top_left", 0, 0),
-            ("top_right", half_size, 0),
-            ("bottom_left", 0, half_size),
-            ("bottom_right", half_size, half_size)
-        ]
-        
-        for quadrant, x, y in quadrants:
-            structure = composition.get(quadrant, "center")
-            color = structure_colors.get(structure, (64, 64, 64))
-            
-            # Fill quadrant with base color
-            draw.rectangle([x, y, x + half_size, y + half_size], fill=color)
-            
-            # Add structure-specific patterns
-            self._draw_structure_pattern(draw, structure, x, y, half_size)
-        
-        # Draw sub-tile boundaries
-        draw.line([half_size, 0, half_size, self.tile_size], fill="white", width=1)
-        draw.line([0, half_size, self.tile_size, half_size], fill="white", width=1)
+        # Draw connectivity points using REAL connectivity pattern
+        self._draw_connectivity_points(draw, tile_spec)
         
         return img
     
-    def _draw_structure_pattern(self, draw: ImageDraw.Draw, structure: str, 
-                               x: int, y: int, size: int):
-        """Draw structure-specific patterns within a quadrant."""
+    def _draw_connectivity_points(self, draw, tile_spec):
+        """Draw connection points based on REAL connectivity pattern."""
+        connection_size = max(4, self.sub_tile_size // 8)
         
-        if "border" in structure:
-            # Draw border indication
-            border_width = max(2, size // 8)
-            
-            if "top" in structure:
-                draw.rectangle([x, y, x + size, y + border_width], fill="white")
-            elif "bottom" in structure:
-                draw.rectangle([x, y + size - border_width, x + size, y + size], fill="white")
-            elif "left" in structure:
-                draw.rectangle([x, y, x + border_width, y + size], fill="white")
-            elif "right" in structure:
-                draw.rectangle([x + size - border_width, y, x + size, y + size], fill="white")
-        
-        elif "edge" in structure:
-            # Draw external corner
-            corner_size = size // 3
-            
-            if "ne" in structure:
-                points = [(x + size, y), (x + size, y + corner_size), (x + size - corner_size, y)]
-                draw.polygon(points, fill="white")
-            elif "nw" in structure:
-                points = [(x, y), (x + corner_size, y), (x, y + corner_size)]
-                draw.polygon(points, fill="white")
-            elif "se" in structure:
-                points = [(x + size, y + size), (x + size - corner_size, y + size), (x + size, y + size - corner_size)]
-                draw.polygon(points, fill="white")
-            elif "sw" in structure:
-                points = [(x, y + size), (x, y + size - corner_size), (x + corner_size, y + size)]
-                draw.polygon(points, fill="white")
-        
-        elif "corner" in structure:
-            # Draw internal corner (L-shape)
-            corner_size = size // 2
-            
-            if "ne" in structure:
-                draw.rectangle([x, y + corner_size, x + corner_size, y + size], fill="white")
-                draw.rectangle([x + corner_size, y, x + size, y + corner_size], fill="white")
-            elif "nw" in structure:
-                draw.rectangle([x + corner_size, y + corner_size, x + size, y + size], fill="white")
-                draw.rectangle([x, y, x + corner_size, y + corner_size], fill="white")
-            elif "se" in structure:
-                draw.rectangle([x, y, x + corner_size, y + corner_size], fill="white")
-                draw.rectangle([x + corner_size, y + corner_size, x + size, y + size], fill="white")
-            elif "sw" in structure:
-                draw.rectangle([x + corner_size, y, x + size, y + corner_size], fill="white")
-                draw.rectangle([x, y + corner_size, x + corner_size, y + size], fill="white")
-    
-    def _generate_depth_reference(self, tile_spec: Any) -> Image.Image:
-        """Generate depth reference based on camera perspective."""
-        img = Image.new("L", (self.tile_size, self.tile_size), 128)  # Grayscale
-        draw = ImageDraw.Draw(img)
-        
-        elevation = self.camera_params.get("elevation", 90)
-        composition = tile_spec.structure_composition
-        
-        # Base depth values based on structure type
-        depth_values = {
-            "center": 128,        # Mid-depth
-            "border_top": 96,     # Slightly recessed
-            "border_right": 96,
-            "border_bottom": 96,
-            "border_left": 96,
-            "edge_ne": 64,        # More recessed (external corners)
-            "edge_nw": 64,
-            "edge_se": 64,
-            "edge_sw": 64,
-            "corner_ne": 192,     # Raised (internal corners)
-            "corner_nw": 192,
-            "corner_se": 192,
-            "corner_sw": 192,
-        }
-        
-        half_size = self.tile_size // 2
-        quadrants = [
-            ("top_left", 0, 0),
-            ("top_right", half_size, 0),
-            ("bottom_left", 0, half_size),
-            ("bottom_right", half_size, half_size)
-        ]
-        
-        for quadrant, x, y in quadrants:
-            structure = composition.get(quadrant, "center")
-            base_depth = depth_values.get(structure, 128)
-            
-            # Create gradient based on camera elevation
-            if elevation > 45:  # Top-down or high angle
-                # Uniform depth with slight variation
-                for dy in range(half_size):
-                    depth = base_depth + int((dy / half_size) * 16 - 8)
-                    depth = max(0, min(255, depth))
-                    draw.line([x, y + dy, x + half_size, y + dy], fill=depth)
-            else:  # Isometric or side view
-                # More pronounced depth gradient
-                for dy in range(half_size):
-                    for dx in range(half_size):
-                        depth = base_depth + int((dy / half_size) * 32 - 16)
-                        depth = max(0, min(255, depth))
-                        draw.point([x + dx, y + dy], fill=depth)
-        
-        return img.convert("RGB")
-    
-    def _generate_normal_reference(self, tile_spec: Any) -> Image.Image:
-        """Generate normal map reference for surface details."""
-        # Create a basic normal map (pointing up = blue)
-        img = Image.new("RGB", (self.tile_size, self.tile_size), (128, 128, 255))
-        
-        # Add subtle normal variations based on lighting direction
-        light_dir = self.lighting_config.get("direction", [0, -1, 0])
-        
-        # #TODO - Simple normal map generation based on lighting
-        # This is simplified - could be enhanced with actual normal calculations
-        
-        return img
-    
-    def _generate_edge_constraints_reference(self, tile_spec: Any) -> Image.Image:
-        """Generate edge constraints reference for seamless tiling."""
-        img = Image.new("RGB", (self.tile_size, self.tile_size), "black")
-        draw = ImageDraw.Draw(img)
-        
-        seamless_edges = tile_spec.seamless_edges
-        
-        # Mark edges that need to be seamless
-        edge_width = 2
-        
-        if "top" in seamless_edges:
-            draw.rectangle([0, 0, self.tile_size, edge_width], fill="white")
-        
-        if "right" in seamless_edges:
-            draw.rectangle([self.tile_size - edge_width, 0, self.tile_size, self.tile_size], fill="white")
-        
-        if "bottom" in seamless_edges:
-            draw.rectangle([0, self.tile_size - edge_width, self.tile_size, self.tile_size], fill="white")
-        
-        if "left" in seamless_edges:
-            draw.rectangle([0, 0, edge_width, self.tile_size], fill="white")
-        
-        return img
-    
-    def _generate_lighting_reference(self, tile_spec: Any) -> Image.Image:
-        """Generate lighting reference based on global lighting configuration."""
-        img = Image.new("RGB", (self.tile_size, self.tile_size), "black")
-        draw = ImageDraw.Draw(img)
-        
-        # Get lighting direction
-        light_dir = self.lighting_config.get("direction", [0, -1, 0])
-        
-        # Create simple lighting gradient
-        for y in range(self.tile_size):
-            for x in range(self.tile_size):
-                # Calculate lighting intensity based on position and light direction
-                intensity = 128 + int(64 * (light_dir[0] * (x / self.tile_size - 0.5) + 
-                                           light_dir[1] * (y / self.tile_size - 0.5)))
-                intensity = max(0, min(255, intensity))
-                draw.point([x, y], fill=(intensity, intensity, intensity))
-        
-        return img
-    
-    def _coordinate_shared_edges(self, reference_maps: Dict[int, Dict[str, Image.Image]]) -> List[Dict[str, Any]]:
-        """Coordinate shared edges to ensure matching reference content."""
-        shared_edge_matches = []
-        
-        for edge in self.shared_edges:
-            tile_a_id = edge.tile_a_id
-            tile_b_id = edge.tile_b_id
-            edge_type = edge.edge_type
-            
-            if tile_a_id not in reference_maps or tile_b_id not in reference_maps:
+        for direction in tile_spec.connectivity_pattern:
+            # Get edge pattern for this direction
+            pattern_id = tile_spec.edge_patterns.get(direction, "free")
+            if pattern_id == "free":
                 continue
+                
+            # Get consistent color for this pattern
+            pattern_color = self._get_pattern_color(pattern_id)
             
-            # Get reference maps for both tiles
-            tile_a_refs = reference_maps[tile_a_id]
-            tile_b_refs = reference_maps[tile_b_id]
-            
-            # Coordinate each reference type
-            for ref_type in tile_a_refs:
-                if ref_type in tile_b_refs:
-                    self._match_edge_content(
-                        tile_a_refs[ref_type], 
-                        tile_b_refs[ref_type], 
-                        edge_type
-                    )
-            
-            shared_edge_matches.append({
-                "tile_a_id": tile_a_id,
-                "tile_b_id": tile_b_id,
-                "edge_type": edge_type,
-                "coordinated": True
-            })
-        
-        return shared_edge_matches
+            # Draw connection points at sub-tile boundaries
+            if direction == "top":
+                for i in range(1, self.sub_tiles_per_row):
+                    x = i * self.sub_tile_size
+                    draw.rectangle([x-connection_size//2, 0, x+connection_size//2, connection_size], 
+                                 fill=pattern_color, outline="white")
+            elif direction == "bottom":
+                for i in range(1, self.sub_tiles_per_row):
+                    x = i * self.sub_tile_size
+                    draw.rectangle([x-connection_size//2, self.tile_size-connection_size, 
+                                  x+connection_size//2, self.tile_size], fill=pattern_color, outline="white")
+            elif direction == "left":
+                for i in range(1, self.sub_tiles_per_col):
+                    y = i * self.sub_tile_size
+                    draw.rectangle([0, y-connection_size//2, connection_size, y+connection_size//2], 
+                                 fill=pattern_color, outline="white")
+            elif direction == "right":
+                for i in range(1, self.sub_tiles_per_col):
+                    y = i * self.sub_tile_size
+                    draw.rectangle([self.tile_size-connection_size, y-connection_size//2, 
+                                  self.tile_size, y+connection_size//2], fill=pattern_color, outline="white")
     
-    def _match_edge_content(self, img_a: Image.Image, img_b: Image.Image, edge_type: str):
-        """Make edge content match between two reference images."""
-        # Convert to numpy arrays for easier manipulation
-        arr_a = np.array(img_a)
-        arr_b = np.array(img_b)
+    def _generate_structure_depth_reference(self, tile_spec) -> Image.Image:
+        """Generate depth map based on structure composition."""
+        img = Image.new("L", (self.tile_size, self.tile_size), 128)  # Neutral gray
         
-        if edge_type == "right":  # tile_a's right edge = tile_b's left edge
-            # Copy tile_a's right edge to tile_b's left edge
-            arr_b[:, :2] = arr_a[:, -2:]
-        elif edge_type == "bottom":  # tile_a's bottom edge = tile_b's top edge
-            # Copy tile_a's bottom edge to tile_b's top edge
-            arr_b[:2, :] = arr_a[-2:, :]
+        # Vary depth per sub-tile based on structure type
+        depth_values = {
+            "CORNER": 180,      # Raised
+            "EDGE": 140,        # Medium-high
+            "T_JUNCTION": 120,  # Medium-low
+            "CENTER": 100,      # Lowered
+            "GENERIC": 128      # Neutral
+        }
         
-        # Update the image
-        img_b.paste(Image.fromarray(arr_b))
+        for row in range(self.sub_tiles_per_row):
+            for col in range(self.sub_tiles_per_col):
+                quadrant_key = f"sub_{row}_{col}"
+                structure_type = tile_spec.structure_composition.get(quadrant_key, "GENERIC")
+                
+                # Calculate sub-tile bounds
+                x1 = col * self.sub_tile_size
+                y1 = row * self.sub_tile_size
+                x2 = x1 + self.sub_tile_size
+                y2 = y1 + self.sub_tile_size
+                
+                # Create sub-image with appropriate depth
+                depth_value = depth_values[structure_type]
+                sub_img = Image.new("L", (self.sub_tile_size, self.sub_tile_size), depth_value)
+                img.paste(sub_img, (x1, y1))
+        
+        return img
     
-    def _generate_control_image(self, references: Dict[str, Image.Image]) -> Image.Image:
-        """Generate primary control image for ControlNet based on model type."""
+    def _generate_structure_normal_reference(self, tile_spec) -> Image.Image:
+        """Generate normal map based on structure composition."""
+        img = Image.new("RGB", (self.tile_size, self.tile_size), (128, 128, 255))  # Neutral normal
         
-        if self.controlnet_model == "flux-controlnet-union":
-            # Union model can handle multiple control types
-            return self._generate_union_control_image(references)
-        elif self.controlnet_model == "flux-controlnet-depth":
-            # Use depth reference
-            return references["depth"]
-        elif self.controlnet_model == "flux-controlnet-canny":
-            # Generate canny edge detection from structural reference
-            return self._generate_canny_control_image(references["structural"])
+        # Vary normals per sub-tile based on structure type
+        normal_values = {
+            "CORNER": (140, 140, 255),      # Slightly angled
+            "EDGE": (128, 140, 255),        # Edge-oriented
+            "T_JUNCTION": (140, 128, 255),  # Junction-oriented
+            "CENTER": (128, 128, 255),      # Flat
+            "GENERIC": (128, 128, 255)      # Neutral
+        }
+        
+        for row in range(self.sub_tiles_per_row):
+            for col in range(self.sub_tiles_per_col):
+                quadrant_key = f"sub_{row}_{col}"
+                structure_type = tile_spec.structure_composition.get(quadrant_key, "GENERIC")
+                
+                # Calculate sub-tile bounds
+                x1 = col * self.sub_tile_size
+                y1 = row * self.sub_tile_size
+                x2 = x1 + self.sub_tile_size
+                y2 = y1 + self.sub_tile_size
+                
+                # Create sub-image with appropriate normal
+                normal_color = normal_values[structure_type]
+                sub_img = Image.new("RGB", (self.sub_tile_size, self.sub_tile_size), normal_color)
+                img.paste(sub_img, (x1, y1))
+        
+        return img
+
+    def _generate_seamless_edge_constraints(self, tile_spec) -> Image.Image:
+        """Generate edge constraints using REAL seamless_edges data."""
+        img = Image.new("RGB", (self.tile_size, self.tile_size), "black")
+        draw = ImageDraw.Draw(img)
+
+        edge_width = max(4, self.sub_tile_size // 8)
+
+        # Only mark edges that are actually in seamless_edges list
+        for direction in ["top", "bottom", "left", "right"]:
+            if direction in tile_spec.seamless_edges:
+                # This edge MUST match neighbors - mark as RED
+                pattern_id = tile_spec.edge_patterns.get(direction, "free")
+                pattern_color = self._get_pattern_color(pattern_id)
+
+                if direction == "top":
+                    draw.rectangle([0, 0, self.tile_size, edge_width], fill="red", outline=pattern_color, width=2)
+                elif direction == "bottom":
+                    draw.rectangle([0, self.tile_size-edge_width, self.tile_size, self.tile_size],
+                                 fill="red", outline=pattern_color, width=2)
+                elif direction == "left":
+                    draw.rectangle([0, 0, edge_width, self.tile_size], fill="red", outline=pattern_color, width=2)
+                elif direction == "right":
+                    draw.rectangle([self.tile_size-edge_width, 0, self.tile_size, self.tile_size],
+                                 fill="red", outline=pattern_color, width=2)
+            else:
+                # This edge is FREE - mark as BLUE
+                if direction == "top":
+                    draw.rectangle([0, 0, self.tile_size, edge_width], fill="blue")
+                elif direction == "bottom":
+                    draw.rectangle([0, self.tile_size-edge_width, self.tile_size, self.tile_size], fill="blue")
+                elif direction == "left":
+                    draw.rectangle([0, 0, edge_width, self.tile_size], fill="blue")
+                elif direction == "right":
+                    draw.rectangle([self.tile_size-edge_width, 0, self.tile_size, self.tile_size], fill="blue")
+
+        # Mark sub-tile boundaries for precision
+        for i in range(1, self.sub_tiles_per_row):
+            x = i * self.sub_tile_size
+            draw.line([(x, 0), (x, self.tile_size)], fill="gray", width=1)
+        for i in range(1, self.sub_tiles_per_col):
+            y = i * self.sub_tile_size
+            draw.line([(0, y), (self.tile_size, y)], fill="gray", width=1)
+
+        return img
+
+    def _generate_structure_lighting_reference(self, tile_spec) -> Image.Image:
+        """Generate lighting reference based on structure composition."""
+        img = Image.new("RGB", (self.tile_size, self.tile_size), (200, 180, 140))  # Warm base
+
+        # Vary lighting per sub-tile based on structure type
+        lighting_values = {
+            "CORNER": (240, 220, 180),      # Brighter (raised)
+            "EDGE": (220, 200, 160),        # Medium-bright
+            "T_JUNCTION": (200, 180, 140),  # Medium
+            "CENTER": (180, 160, 120),      # Darker (lowered)
+            "GENERIC": (200, 180, 140)      # Neutral
+        }
+
+        for row in range(self.sub_tiles_per_row):
+            for col in range(self.sub_tiles_per_col):
+                quadrant_key = f"sub_{row}_{col}"
+                structure_type = tile_spec.structure_composition.get(quadrant_key, "GENERIC")
+
+                # Calculate sub-tile bounds
+                x1 = col * self.sub_tile_size
+                y1 = row * self.sub_tile_size
+                x2 = x1 + self.sub_tile_size
+                y2 = y1 + self.sub_tile_size
+
+                # Create sub-image with appropriate lighting
+                lighting_color = lighting_values[structure_type]
+                sub_img = Image.new("RGB", (self.sub_tile_size, self.sub_tile_size), lighting_color)
+                img.paste(sub_img, (x1, y1))
+
+        return img
+
+    def _generate_pattern_control_image(self, tile_spec) -> Image.Image:
+        """Generate control image for ControlNet using edge patterns."""
+        # Use edge constraints as base
+        control_img = self._generate_seamless_edge_constraints(tile_spec)
+
+        # Add pattern-specific markers for ControlNet guidance
+        draw = ImageDraw.Draw(control_img)
+
+        # Add tile type indicator in center
+        center_x = self.tile_size // 2
+        center_y = self.tile_size // 2
+        tile_type_color = {
+            "corner": (255, 0, 0),
+            "edge": (0, 255, 0),
+            "t_junction": (0, 0, 255),
+            "cross": (255, 255, 0)
+        }.get(tile_spec.tile_type, (128, 128, 128))
+
+        marker_size = self.sub_tile_size // 4
+        draw.ellipse([center_x-marker_size, center_y-marker_size,
+                     center_x+marker_size, center_y+marker_size],
+                    fill=tile_type_color, outline="white", width=2)
+
+        return control_img
+
+    def _get_pattern_color(self, pattern_id: str) -> Tuple[int, int, int]:
+        """Get consistent color for edge pattern."""
+        if pattern_id not in self.pattern_colors:
+            # Generate deterministic color from pattern_id hash
+            hash_val = hash(pattern_id) % (256 * 256 * 256)
+            r = (hash_val >> 16) & 255
+            g = (hash_val >> 8) & 255
+            b = hash_val & 255
+            # Ensure colors are bright enough to see
+            r = max(r, 100)
+            g = max(g, 100)
+            b = max(b, 100)
+            self.pattern_colors[pattern_id] = (r, g, b)
+
+        return self.pattern_colors[pattern_id]
+
+    def _track_edge_patterns(self, tile_spec, edge_pattern_summary):
+        """Track edge patterns for consistency validation."""
+        for direction, pattern_id in tile_spec.edge_patterns.items():
+            if pattern_id not in edge_pattern_summary:
+                edge_pattern_summary[pattern_id] = {
+                    "tiles_using": [],
+                    "directions": [],
+                    "color": self._get_pattern_color(pattern_id)
+                }
+
+            edge_pattern_summary[pattern_id]["tiles_using"].append(tile_spec.tile_id)
+            edge_pattern_summary[pattern_id]["directions"].append(f"{tile_spec.tile_id}_{direction}")
+
+    def _update_tessellation_stats(self, tile_spec, tessellation_stats):
+        """Update tessellation statistics."""
+        # Count seamless edges
+        tessellation_stats["total_seamless_edges"] += len(tile_spec.seamless_edges)
+
+        # Track pattern usage
+        for pattern_id in tile_spec.edge_patterns.values():
+            tessellation_stats["pattern_usage"][pattern_id] = \
+                tessellation_stats["pattern_usage"].get(pattern_id, 0) + 1
+
+        # Track structure distribution
+        for structure_type in tile_spec.structure_composition.values():
+            tessellation_stats["structure_distribution"][structure_type] = \
+                tessellation_stats["structure_distribution"].get(structure_type, 0) + 1
+
+    def save_tessellation_references(self, context: PipelineContext, synthesis_result: Dict[str, Any]):
+        """Save reference images with proper tessellation-based naming."""
+        # Create references directory
+        references_dir = self.output_path / "references"
+        references_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save reference maps for each tile
+        for tile_id, reference_maps in synthesis_result["reference_maps"].items():
+            tile_spec = self.tileset_setup.get_tile_spec(tile_id)
+            if not tile_spec:
+                logger.warning("No tile spec found for reference saving", tile_id=tile_id)
+                continue
+
+            # Create descriptive tile name using REAL tessellation data
+            tile_name = self._create_tessellation_tile_name(tile_spec)
+
+            # Create tile directory
+            tile_dir = references_dir / tile_name
+            tile_dir.mkdir(exist_ok=True)
+
+            # Save each reference type
+            for ref_type, image in reference_maps.items():
+                if image:
+                    image_path = tile_dir / f"{ref_type}.png"
+                    image.save(image_path)
+                    logger.debug(f"Saved reference image",
+                               tile_id=tile_id,
+                               tile_name=tile_name,
+                               ref_type=ref_type,
+                               path=str(image_path))
+
+        # Save control images
+        control_dir = references_dir / "control_images"
+        control_dir.mkdir(exist_ok=True)
+
+        for tile_id, control_image in synthesis_result["control_images"].items():
+            if control_image:
+                tile_spec = self.tileset_setup.get_tile_spec(tile_id)
+                if tile_spec:
+                    tile_name = self._create_tessellation_tile_name(tile_spec)
+                    control_path = control_dir / f"{tile_name}_control.png"
+                    control_image.save(control_path)
+                    logger.debug(f"Saved control image",
+                               tile_id=tile_id,
+                               tile_name=tile_name,
+                               path=str(control_path))
+
+        # Save comprehensive tessellation summary
+        summary_path = references_dir / "tessellation_summary.json"
+        summary_data = {
+            "job_id": context.get_job_id(),
+            "tileset_configuration": {
+                "tile_size": self.tile_size,
+                "sub_tile_size": self.sub_tile_size,
+                "sub_tiles_per_row": self.sub_tiles_per_row,
+                "sub_tiles_per_col": self.sub_tiles_per_col,
+                "tileset_type": self.config.get("tileset_type")
+            },
+            "tessellation_summary": synthesis_result["tessellation_summary"],
+            "edge_pattern_summary": synthesis_result["edge_pattern_summary"],
+            "reference_types": ["structural", "depth", "normal", "edge_constraints", "lighting"],
+            "generated_at": context.job_spec.get("createdAt")
+        }
+
+        with open(summary_path, 'w') as f:
+            json.dump(summary_data, f, indent=2)
+
+        logger.info("Tessellation references saved",
+                   job_id=context.get_job_id(),
+                   references_dir=str(references_dir),
+                   total_tiles=len(synthesis_result["reference_maps"]),
+                   edge_patterns=len(synthesis_result["edge_pattern_summary"]))
+
+    def _create_tessellation_tile_name(self, tile_spec):
+        """Create descriptive tile name using REAL tessellation data."""
+        tile_id = tile_spec.tile_id
+        tile_type = tile_spec.tile_type
+        connectivity = tile_spec.connectivity_pattern
+
+        # Create name based on actual tessellation properties
+        if tile_type == "corner":
+            # Determine corner orientation from connectivity
+            if "top" in connectivity and "right" in connectivity:
+                return f"tile_corner_ne_{tile_id:02d}"
+            elif "top" in connectivity and "left" in connectivity:
+                return f"tile_corner_nw_{tile_id:02d}"
+            elif "bottom" in connectivity and "right" in connectivity:
+                return f"tile_corner_se_{tile_id:02d}"
+            elif "bottom" in connectivity and "left" in connectivity:
+                return f"tile_corner_sw_{tile_id:02d}"
+            else:
+                return f"tile_corner_{tile_id:02d}"
+
+        elif tile_type == "edge":
+            # Single connection edge
+            direction = list(connectivity)[0] if connectivity else "unknown"
+            return f"tile_edge_{direction}_{tile_id:02d}"
+
+        elif tile_type == "t_junction":
+            # Determine T orientation from missing direction
+            all_directions = {"top", "bottom", "left", "right"}
+            missing = all_directions - connectivity
+            missing_dir = list(missing)[0] if missing else "unknown"
+            return f"tile_t_{missing_dir}_{tile_id:02d}"
+
+        elif tile_type == "cross":
+            return f"tile_cross_{tile_id:02d}"
+
         else:
-            # Default to structural reference
-            return references["structural"]
-    
-    def _generate_union_control_image(self, references: Dict[str, Image.Image]) -> Image.Image:
-        """Generate multi-channel control image for Union ControlNet."""
-        structural = references["structural"]
-        depth = references["depth"]
-        edge_constraints = references["edge_constraints"]
-        
-        # Convert to numpy arrays
-        struct_array = np.array(structural)
-        depth_array = np.array(depth)
-        edge_array = np.array(edge_constraints)
-        
-        # Combine channels: R=structural, G=depth, B=edge_constraints
-        combined = np.zeros((self.tile_size, self.tile_size, 3), dtype=np.uint8)
-        combined[:, :, 0] = struct_array[:, :, 0]  # Red channel from structural
-        combined[:, :, 1] = depth_array[:, :, 0]   # Green channel from depth
-        combined[:, :, 2] = edge_array[:, :, 0]    # Blue channel from edge constraints
-        
-        return Image.fromarray(combined)
-    
-    def _generate_canny_control_image(self, structural_ref: Image.Image) -> Image.Image:
-        """Generate Canny edge detection control image."""
-        # Convert to grayscale
-        gray = structural_ref.convert("L")
-        gray_array = np.array(gray)
-        
-        # Apply Canny edge detection
-        edges = cv2.Canny(gray_array, 50, 150)
-        
-        # Convert back to RGB
-        edge_rgb = np.stack([edges, edges, edges], axis=2)
-        
-        return Image.fromarray(edge_rgb)
+            return f"tile_{tile_type}_{tile_id:02d}"

@@ -18,6 +18,9 @@ worker/build/
 worker/dist/
 *.egg-info/
 
+# Generation jobs
+jobs/
+
 # IDE and editor files
 .vscode/
 .idea/

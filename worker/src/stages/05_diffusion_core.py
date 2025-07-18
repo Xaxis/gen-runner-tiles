@@ -41,23 +41,25 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
         if not context.validate_context_state(5):
             return {"success": False, "errors": context.pipeline_errors}
         
-        # Get required data from context
+        # Get required data from context (using refactored pipeline)
         tileset_setup = context.universal_tileset
         reference_maps = context.reference_maps
         control_images = context.control_images
-        camera_params = context.global_camera_params
+        perspective_config = context.perspective_config
         lighting_config = context.lighting_config
-        extracted_config = getattr(context, 'extracted_config', None)
+        tessellation_perspective = context.tessellation_perspective
+        extracted_config = getattr(context, 'extracted_config', {})
         
         if not all([tileset_setup, reference_maps, control_images]):
             context.add_error(5, "Missing required data from previous stages")
             return {"success": False, "errors": ["Missing required data from previous stages"]}
         
-        # Initialize FULL multi-tile diffusion engine
+        # Initialize FULL multi-tile diffusion engine with refactored data
         diffusion_engine = FullMultiTileDiffusionEngine(
             tileset_setup=tileset_setup,
-            camera_params=camera_params,
+            perspective_config=perspective_config,
             lighting_config=lighting_config,
+            tessellation_perspective=tessellation_perspective,
             config=extracted_config
         )
         
@@ -100,42 +102,49 @@ def execute(context: PipelineContext) -> Dict[str, Any]:
 class FullMultiTileDiffusionEngine:
     """FULL implementation of multi-tile diffusion with cross-tile attention and edge copying."""
     
-    def __init__(self, tileset_setup: Any, camera_params: Dict[str, Any], 
-                 lighting_config: Dict[str, Any], config: Dict[str, Any]):
+    def __init__(self, tileset_setup: Any, perspective_config: Dict[str, Any],
+                 lighting_config: Dict[str, Any], tessellation_perspective: Dict[str, Any],
+                 config: Dict[str, Any]):
         self.tileset_setup = tileset_setup
-        self.camera_params = camera_params
+        self.perspective_config = perspective_config
         self.lighting_config = lighting_config
+        self.tessellation_perspective = tessellation_perspective
         self.config = config
         
-        # Tile and atlas properties
+        # Tessellation properties from refactored pipeline
         self.tile_count = tileset_setup.tile_count
         self.tile_size = tileset_setup.tile_size
+        self.sub_tile_size = tileset_setup.sub_tile_size  # Now calculated by Stage 2
+        self.sub_tiles_per_row = tileset_setup.sub_tiles_per_row
+        self.sub_tiles_per_col = tileset_setup.sub_tiles_per_col
         self.atlas_columns = tileset_setup.atlas_columns
         self.atlas_rows = tileset_setup.atlas_rows
         self.atlas_width = self.atlas_columns * self.tile_size
         self.atlas_height = self.atlas_rows * self.tile_size
         
-        # Generation parameters
-        gen_params = config.get("generation", {})
-        self.steps = gen_params.get("steps", 50)
-        self.guidance_scale = gen_params.get("guidance_scale", 3.5)
-        self.seed = gen_params.get("seed")
+        # Generation parameters (simplified from refactored config)
+        self.steps = 50  # Fixed optimal steps for tessellation
+        self.guidance_scale = 3.5  # Fixed optimal guidance for FLUX
+        self.seed = config.get("seed")  # Optional seed
+
+        # Model configuration (simplified)
+        self.base_model_name = config.get("baseModel", "flux-dev")
+        self.use_controlnet = True  # Always use ControlNet for tessellation
         
-        # Model configuration
-        model_config = config.get("models", {})
-        self.base_model_name = model_config.get("base_model", "flux-dev")
-        self.controlnet_model_name = model_config.get("controlnet_model")
-        self.use_controlnet = model_config.get("use_controlnet", True)
-        
-        # FULL multi-tile coordination parameters
-        self.cross_tile_attention_window = 32  # 32px overlap
-        self.edge_copy_width = 4  # 4px edge copying
+        # FULL multi-tile coordination parameters (using calculated sub-tile precision)
+        self.cross_tile_attention_window = self.sub_tile_size  # Overlap = sub-tile size
+        self.edge_copy_width = max(2, self.sub_tile_size // 8)  # Proportional edge copying
         self.circular_padding = True  # Enable circular padding in UNet
         self.round_robin_frequency = 1  # Copy edges every step
+
+        # Tessellation-aware parameters
+        self.seamless_edge_precision = self.sub_tile_size
+        self.pattern_consistency_enforcement = True
+        self.structure_aware_generation = True
         
         # Model registry for lazy loading
         self.model_registry = ModelRegistry()
-        
+
         # Loaded models and coordination data
         self.base_pipeline = None
         self.controlnet_pipeline = None
@@ -143,6 +152,15 @@ class FullMultiTileDiffusionEngine:
         self.shared_edges = None
         self.atlas_layout = None
         self.attention_windows = None
+
+        logger.info("Multi-tile diffusion engine initialized",
+                   tile_size=self.tile_size,
+                   sub_tile_size=self.sub_tile_size,
+                   sub_tile_grid=f"{self.sub_tiles_per_row}x{self.sub_tiles_per_col}",
+                   cross_tile_attention_window=self.cross_tile_attention_window,
+                   edge_copy_width=self.edge_copy_width,
+                   atlas_size=f"{self.atlas_columns}x{self.atlas_rows}",
+                   total_tiles=self.tile_count)
     
     def generate_with_full_coordination(self, reference_maps: Dict[int, Dict[str, Image.Image]], 
                                        control_images: Dict[int, Image.Image]) -> Dict[str, Any]:

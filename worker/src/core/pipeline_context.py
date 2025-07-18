@@ -28,7 +28,7 @@ class PipelineContext:
     tileset_summary: Optional[Dict[str, Any]] = None
     
     # Stage 03: Perspective and lighting setup
-    global_camera_params: Optional[Dict[str, Any]] = None
+    perspective_params: Optional[Dict[str, Any]] = None
     lighting_config: Optional[Dict[str, Any]] = None
     
     # Stage 04: Reference synthesis results

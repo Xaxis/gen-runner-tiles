@@ -20,13 +20,8 @@ program
   .option('-t, --theme <theme>', 'Theme for the tileset (e.g., fantasy, sci-fi)')
   .option('-p, --palette <palette>', 'Color palette name')
   .option('-s, --size <size>', 'Tile size in pixels', '32')
-  .option('--sub-tile-size <size>', 'Sub-tile size in pixels', '8')
   .option('--tileset <type>', 'Tileset type (minimal, extended, full)', 'minimal')
   .option('--base-model <model>', 'Base model to use (flux-dev, flux-schnell)', 'flux-dev')
-  .option('--no-controlnet', 'Disable ControlNet guidance')
-  .option('--steps <steps>', 'Number of diffusion steps')
-  .option('--guidance-scale <scale>', 'Guidance scale for generation')
-  .option('--seed <seed>', 'Random seed for reproducible generation')
   .option('--watch', 'Watch generation progress in real-time')
   .action(generateCommand);
 

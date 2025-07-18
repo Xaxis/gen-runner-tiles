@@ -29,6 +29,8 @@ export async function generateCommand(options: GenerateOptions): Promise<void> {
     console.log(chalk.gray(`Palette: ${jobSpec.palette}`));
     console.log(chalk.gray(`Tile Size: ${jobSpec.tileSize}px`));
     console.log(chalk.gray(`Tileset Type: ${jobSpec.tileset_type}`));
+    console.log(chalk.gray(`View Angle: ${jobSpec.viewAngle}`));
+    console.log(chalk.gray(`Base Model: ${jobSpec.baseModel}`));
     
     // Submit to file queue
     console.log(chalk.gray('Submitting job to queue...'));
@@ -81,10 +83,13 @@ async function processJobWithWorker(jobId: string): Promise<void> {
     console.log(chalk.gray(`Starting Python worker in: ${workerPath}`));
     console.log(chalk.gray(`Processing job file: ${jobFilePath}`));
 
-    // Spawn the Python worker process
+    // Spawn the Python worker process with environment variables
     const worker = spawn('python', ['-m', 'src.main', '--job-file', jobFilePath], {
       cwd: workerPath,
-      stdio: 'inherit' // Show worker output directly
+      stdio: 'inherit', // Show worker output directly
+      env: {
+        ...process.env,
+      }
     });
 
     worker.on('close', (code) => {

@@ -51,15 +51,13 @@ class PaletteConfig:
 class ModelRegistry:
     """Registry for lazy loading of models, themes, and palettes."""
     
-    def __init__(self, data_dir: str = "./worker/data"):
-        self.data_dir = Path(data_dir)
-        self.models_dir = self.data_dir / "models"
-        self.config_dir = self.data_dir / "config"
-        
-        # Ensure directories exist
-        self.models_dir.mkdir(parents=True, exist_ok=True)
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        
+    def __init__(self, data_dir: str = None):
+        # Use global HuggingFace cache directory - no local storage!
+        # Models are cached globally by HuggingFace, configs come from jobs
+        self.data_dir = None  # No local data directory needed
+        self.models_dir = None  # Models stored globally by HuggingFace
+        self.config_dir = None  # Configs come from job specs
+
         # Model configurations (lightweight - no actual models loaded)
         self.model_configs: Dict[str, ModelConfig] = {}
         self.theme_configs: Dict[str, ThemeConfig] = {}
@@ -292,11 +290,22 @@ class ModelRegistry:
             # Determine torch dtype
             torch_dtype = getattr(torch, config.precision)
             
-            # Load the pipeline
+            # Load the pipeline with HuggingFace token
+            import os
+            from huggingface_hub import login
+
+            hf_token = os.getenv('HUGGINGFACE_TOKEN')
+
+            if hf_token:
+                logger.info("Logging in to HuggingFace with token")
+                login(token=hf_token)
+            else:
+                logger.warning("No HuggingFace token found in environment")
+
             pipeline = FluxPipeline.from_pretrained(
                 config.model_id,
-                torch_dtype=torch_dtype,
-                cache_dir=config.cache_dir
+                torch_dtype=torch_dtype
+                # Uses global HuggingFace cache automatically
             )
             
             if config.enable_cpu_offload:
@@ -332,11 +341,11 @@ class ModelRegistry:
             # Determine torch dtype
             torch_dtype = getattr(torch, config.precision)
             
-            # Load the ControlNet
+            # Load the ControlNet (token already set via login above)
             controlnet = FluxControlNetModel.from_pretrained(
                 config.model_id,
-                torch_dtype=torch_dtype,
-                cache_dir=config.cache_dir
+                torch_dtype=torch_dtype
+                # Uses global HuggingFace cache automatically
             )
             
             self.loaded_models[model_name] = controlnet

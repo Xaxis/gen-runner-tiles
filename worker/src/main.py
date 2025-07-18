@@ -8,7 +8,6 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any
 
 from .core.job_processor import JobProcessor
 

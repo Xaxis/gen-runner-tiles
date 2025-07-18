@@ -21,14 +21,9 @@ class JobProcessor:
     
     def __init__(self, jobs_dir: str = "../jobs"):
         self.jobs_dir = Path(jobs_dir)
-        self.queue_dir = self.jobs_dir / "queue"
-        self.status_dir = self.jobs_dir / "status"
-        self.output_dir = self.jobs_dir / "output"
-        
-        # Ensure directories exist
-        self.queue_dir.mkdir(parents=True, exist_ok=True)
-        self.status_dir.mkdir(parents=True, exist_ok=True)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Models are stored globally, not per-job
+        # Only job output goes in jobs directory
         
         # Pipeline stages in execution order
         self.pipeline_stages = [
@@ -47,8 +42,9 @@ class JobProcessor:
         logger.info("Processing job directly", job_id=job_id)
 
         try:
-            # Create pipeline context
-            output_path = self.output_dir / job_id
+            # Create pipeline context - output goes to jobs/output
+            output_path = self.jobs_dir / "output" / job_id
+            output_path.mkdir(parents=True, exist_ok=True)
             context = PipelineContext(job_spec, output_path)
 
             # Execute all pipeline stages
@@ -56,6 +52,9 @@ class JobProcessor:
                 logger.info(f"Executing stage {stage_num}", stage=stage_name, description=stage_desc)
 
                 result = self._execute_stage(stage_num, stage_name, context)
+
+                # Debug: Log stage result
+                logger.info(f"Stage {stage_num} result", stage=stage_num, success=result.get("success"), result_keys=list(result.keys()))
 
                 if not result.get("success", False):
                     errors = result.get('errors', ['Unknown error'])
