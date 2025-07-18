@@ -322,13 +322,24 @@ class ModelRegistry:
             else:
                 logger.warning("No HuggingFace token found in environment")
 
-            # Load pipeline without device mapping (let Stage 5 handle CPU offloading)
+            # Load pipeline for RTX 3080 with sequential CPU offloading
             pipeline = FluxPipeline.from_pretrained(
                 config.model_id,
-                torch_dtype=torch_dtype,
-                low_cpu_mem_usage=True  # Still use low CPU memory during loading
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True
             )
-            logger.info("Pipeline created without device mapping", model_name=model_name)
+
+            # Use sequential CPU offloading (moves components as needed)
+            try:
+                pipeline.enable_sequential_cpu_offload()  # Most aggressive offloading
+                pipeline.enable_attention_slicing(1)      # Slice attention
+                pipeline.enable_vae_slicing()            # Slice VAE
+                pipeline.enable_vae_tiling()             # Tile VAE
+                logger.info("Sequential CPU offloading enabled for RTX 3080")
+            except Exception as e:
+                logger.warning("Memory optimizations failed", error=str(e))
+
+            logger.info("Pipeline loaded with sequential CPU offloading", model_name=model_name)
             
             self.loaded_models[model_name] = pipeline
             # Apply retro pixel LoRA for overall aesthetic
