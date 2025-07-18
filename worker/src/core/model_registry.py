@@ -11,6 +11,9 @@ from dataclasses import dataclass, asdict
 import torch
 import structlog
 
+# Set CUDA memory optimization for better performance
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 logger = structlog.get_logger()
 
 # Initialize accelerate environment for CPU offloading on MacBook
@@ -342,20 +345,20 @@ class ModelRegistry:
     def _apply_retro_pixel_lora(self, pipeline, model_name: str):
         """Apply retro pixel LoRA for overall aesthetic regardless of theme."""
         try:
-            # Use alvdansen/flux-koda as primary (it's working and supports pixel art)
-            lora_model_id = "alvdansen/flux-koda"
+            # Use UmeAiRT FLUX-specific pixel art LoRA (better quality and performance)
+            lora_model_id = "UmeAiRT/FLUX.1-dev-LoRA-Modern_Pixel_art"
 
             # Load the LoRA directly
             pipeline.load_lora_weights(lora_model_id, adapter_name="retro_pixel")
-            pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.85])  # Strong pixel effect
+            pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.7])  # Optimal weight for this LoRA
 
-            logger.info("Applied FLUX-compatible retro pixel LoRA",
+            logger.info("Applied UmeAiRT FLUX pixel art LoRA",
                        model_name=model_name,
                        lora_model=lora_model_id,
-                       weight=0.85)
+                       weight=0.7)
 
         except Exception as e:
-            logger.warning("Failed to apply FLUX pixel LoRA, continuing with base model",
+            logger.warning("Failed to apply UmeAiRT pixel LoRA, continuing with base model",
                          error=str(e), model_name=model_name, lora_model=lora_model_id)
     
     def load_controlnet_model(self, model_name: str):
