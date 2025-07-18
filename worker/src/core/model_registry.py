@@ -356,28 +356,21 @@ class ModelRegistry:
     def _apply_retro_pixel_lora(self, pipeline, model_name: str):
         """Apply retro pixel LoRA for overall aesthetic regardless of theme."""
         try:
-            # Path to retro pixel LoRA
-            retro_pixel_lora_path = "models/loras/retro_pixel_tileset_v1.safetensors"
+            # Use specific HuggingFace LoRA model for pixel art
+            lora_model_id = "nerijs/pixel-art-xl"
 
-            # Check if LoRA exists
-            import os
-            if not os.path.exists(retro_pixel_lora_path):
-                logger.warning("Retro pixel LoRA not found, using base model only",
-                             path=retro_pixel_lora_path)
-                return
+            # Load and apply LoRA directly from HuggingFace
+            pipeline.load_lora_weights(lora_model_id, adapter_name="retro_pixel")
+            pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.8])  # 80% strength for strong pixel effect
 
-            # Load and apply LoRA
-            pipeline.load_lora_weights(retro_pixel_lora_path, adapter_name="retro_pixel")
-            pipeline.set_adapters(["retro_pixel"], adapter_weights=[0.75])  # 75% strength
-
-            logger.info("Applied retro pixel LoRA",
+            logger.info("Applied retro pixel LoRA from HuggingFace",
                        model_name=model_name,
-                       lora_path=retro_pixel_lora_path,
-                       weight=0.75)
+                       lora_model=lora_model_id,
+                       weight=0.8)
 
         except Exception as e:
             logger.warning("Failed to apply retro pixel LoRA, continuing with base model",
-                         error=str(e), model_name=model_name)
+                         error=str(e), model_name=model_name, lora_model=lora_model_id)
     
     def load_controlnet_model(self, model_name: str):
         """Lazy load a ControlNet model only when needed."""
