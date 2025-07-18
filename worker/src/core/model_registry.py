@@ -65,7 +65,75 @@ class PaletteConfig:
 
 class ModelRegistry:
     """Registry for lazy loading of models, themes, and palettes."""
-    
+
+    # THEME-SPECIFIC TILE PROMPT TEMPLATES
+    THEME_TILE_PROMPTS = {
+        "fantasy_medieval": {
+            "corner_ne": "ancient stone corner with ornate medieval border, castle ruins corner, decorative stonework, northeast corner",
+            "corner_nw": "ancient stone corner with ornate medieval border, castle ruins corner, decorative stonework, northwest corner",
+            "corner_se": "ancient stone corner with ornate medieval border, castle ruins corner, decorative stonework, southeast corner",
+            "corner_sw": "ancient stone corner with ornate medieval border, castle ruins corner, decorative stonework, southwest corner",
+            "edge_top": "medieval stone wall with ornate top border, castle wall segment, decorative stone trim",
+            "edge_bottom": "medieval stone wall with ornate bottom border, castle wall segment, decorative stone trim",
+            "edge_left": "medieval stone wall with ornate left border, castle wall segment, decorative stone trim",
+            "edge_right": "medieval stone wall with ornate right border, castle wall segment, decorative stone trim",
+            "t_top": "medieval stone T-junction with three-way border, castle intersection, ornate stonework",
+            "t_bottom": "medieval stone T-junction with three-way border, castle intersection, ornate stonework",
+            "t_left": "medieval stone T-junction with three-way border, castle intersection, ornate stonework",
+            "t_right": "medieval stone T-junction with three-way border, castle intersection, ornate stonework",
+            "cross": "medieval stone floor with central decorative element, castle courtyard, four-way ornate border"
+        },
+        "sci_fi_cyberpunk": {
+            "corner_ne": "cyberpunk metal corner with neon border, futuristic panel corner, glowing edge trim, northeast corner",
+            "corner_nw": "cyberpunk metal corner with neon border, futuristic panel corner, glowing edge trim, northwest corner",
+            "corner_se": "cyberpunk metal corner with neon border, futuristic panel corner, glowing edge trim, southeast corner",
+            "corner_sw": "cyberpunk metal corner with neon border, futuristic panel corner, glowing edge trim, southwest corner",
+            "edge_top": "cyberpunk metal wall with neon top border, futuristic panel segment, glowing trim",
+            "edge_bottom": "cyberpunk metal wall with neon bottom border, futuristic panel segment, glowing trim",
+            "edge_left": "cyberpunk metal wall with neon left border, futuristic panel segment, glowing trim",
+            "edge_right": "cyberpunk metal wall with neon right border, futuristic panel segment, glowing trim",
+            "t_top": "cyberpunk metal T-junction with neon borders, futuristic intersection, glowing connections",
+            "t_bottom": "cyberpunk metal T-junction with neon borders, futuristic intersection, glowing connections",
+            "t_left": "cyberpunk metal T-junction with neon borders, futuristic intersection, glowing connections",
+            "t_right": "cyberpunk metal T-junction with neon borders, futuristic intersection, glowing connections",
+            "cross": "cyberpunk metal floor with central neon element, futuristic platform, four-way glowing border"
+        },
+        "nature_forest": {
+            "corner_ne": "forest ground corner with moss border, natural woodland corner, organic edge pattern, northeast corner",
+            "corner_nw": "forest ground corner with moss border, natural woodland corner, organic edge pattern, northwest corner",
+            "corner_se": "forest ground corner with moss border, natural woodland corner, organic edge pattern, southeast corner",
+            "corner_sw": "forest ground corner with moss border, natural woodland corner, organic edge pattern, southwest corner",
+            "edge_top": "forest path with moss top border, woodland trail segment, natural edge trim",
+            "edge_bottom": "forest path with moss bottom border, woodland trail segment, natural edge trim",
+            "edge_left": "forest path with moss left border, woodland trail segment, natural edge trim",
+            "edge_right": "forest path with moss right border, woodland trail segment, natural edge trim",
+            "t_top": "forest path T-junction with moss borders, woodland intersection, natural connections",
+            "t_bottom": "forest path T-junction with moss borders, woodland intersection, natural connections",
+            "t_left": "forest path T-junction with moss borders, woodland intersection, natural connections",
+            "t_right": "forest path T-junction with moss borders, woodland intersection, natural connections",
+            "cross": "forest clearing with central natural element, woodland center, four-way moss border"
+        }
+    }
+
+    # NEGATIVE PROMPT TEMPLATE
+    NEGATIVE_PROMPT = ("blurry, smooth, anti-aliased, photorealistic, 3d render, low quality, "
+                      "artifacts, seams, gaps, misaligned edges, inconsistent style, "
+                      "non-tessellating, broken patterns, modern, realistic")
+
+    # CONDITIONING PROMPT FRAGMENTS
+    CONDITIONING_FRAGMENTS = {
+        "edge": "sharp defined edges, clear tile boundaries, precise edge alignment",
+        "structure": "geometric structure consistency, architectural precision, structural coherence",
+        "depth": "proper depth layering, dimensional consistency, 3D structure awareness",
+        "normal": "detailed surface textures, consistent lighting, normal map guided surfaces",
+        "lighting": "unified lighting scheme, consistent illumination, coherent shadows"
+    }
+
+    # QUALITY TERMS
+    QUALITY_TERMS = "crisp pixels, no blur, sharp edges, detailed pixel work, high quality pixel art"
+    STYLE_TERMS = "16-bit retro style, classic video game aesthetic, detailed sprite work, unified tileset design"
+    TESSELLATION_TERMS = "seamless tessellating tiles, perfect edge matching, repeating pattern, no gaps, continuous borders"
+
     def __init__(self):
 
         # Model configurations (lightweight - no actual models loaded)
